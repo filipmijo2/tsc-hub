@@ -688,14 +688,14 @@ markHL.FillColor = Color3.fromRGB(255, 40, 40); markHL.FillTransparency = 0.55
 markHL.OutlineColor = Color3.fromRGB(255, 220, 60); markHL.OutlineTransparency = 0
 markHL.Enabled = false; markHL.Parent = gui
 
-local markBB = Instance.new("BillboardGui")
-markBB.Name = "TSC_MARK_BB"; markBB.AlwaysOnTop = true; markBB.Size = UDim2.fromOffset(220, 40)
-markBB.StudsOffset = Vector3.new(0, 5, 0); markBB.LightInfluence = 0; markBB.Enabled = false; markBB.Parent = gui
+-- Label + Punkt als 2D-Projektion (hängt nicht am Character -> funktioniert auch, wenn er rausgestreamt ist)
 local markLbl = Instance.new("TextLabel")
-markLbl.Size = UDim2.fromScale(1, 1); markLbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0); markLbl.BackgroundTransparency = 1
+markLbl.AnchorPoint = Vector2.new(0.5, 1); markLbl.Size = UDim2.fromOffset(240, 40); markLbl.BackgroundTransparency = 1
 markLbl.Font = Enum.Font.GothamBlack; markLbl.TextSize = 15; markLbl.TextColor3 = Color3.fromRGB(255, 90, 90)
-markLbl.TextStrokeTransparency = 0.2
-markLbl.Parent = markBB
+markLbl.TextStrokeTransparency = 0.2; markLbl.Visible = false; markLbl.Parent = gui
+local markDot = Instance.new("Frame")
+markDot.AnchorPoint = Vector2.new(0.5, 0.5); markDot.Size = UDim2.fromOffset(10, 10); markDot.BorderSizePixel = 0
+markDot.Rotation = 45; markDot.Visible = false; markDot.Parent = gui
 
 
 -- Randpfeil, wenn Ziel off-screen / hinter mir
@@ -835,32 +835,68 @@ task.spawn(function()
 end)
 
 -- Marker jeden Frame
+-- StreamingEnabled: außerhalb der Streaming-Reichweite ist der Character lokal Parent=nil und seine Position
+-- eingefroren (Server schickt nichts). Dann: letzte bekannte Position (grau) + Alter; live wieder, sobald er reinstreamt.
+local markLast = { id = nil, pos = nil, t = nil }
+-- letzte gesehene Position ALLER Spieler (2 Hz), damit auch rausgestreamte Ziele einen Anker haben
+local lastSeen = {} -- [userId] = {pos=, t=}
+task.spawn(function()
+	while H.alive do
+		for _, pl in ipairs(Players:GetPlayers()) do
+			local c = pl.Character
+			local rr = c and c:FindFirstChild("HumanoidRootPart")
+			if rr and c:IsDescendantOf(workspace) then lastSeen[pl.UserId] = { pos = rr.Position, t = os.clock() } end
+		end
+		task.wait(0.5)
+	end
+end)
+con(Players.PlayerRemoving, function(pl) lastSeen[pl.UserId] = nil end)
+local function markHide() markHL.Enabled = false; markLbl.Visible = false; markDot.Visible = false; arrow.Visible = false end
 con(RunService.RenderStepped, function()
 	local p = markedPlayer()
 	if not p then
-		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false
+		markHide()
 		markInfo.Text = state.markName and ("Target: " .. state.markName .. " (offline)") or "Target: -"
 		return
 	end
+	if markLast.id ~= p.UserId then markLast = { id = p.UserId } end
 	local r, c = rootOf(p)
-	if not r then
-		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false
-		markInfo.Text = "Target: " .. p.Name .. " (no char / not streamed)"
+	local live = r and c and c:IsDescendantOf(workspace)
+	local pos
+	if live then
+		pos = r.Position; markLast.pos = pos; markLast.t = os.clock()
+		if markHL.Adornee ~= c then markHL.Adornee = c end
+		markHL.Enabled = true
+	else
+		markHL.Enabled = false
+		local ls = lastSeen[p.UserId]
+		if ls and (not markLast.t or ls.t > markLast.t) then markLast.pos = ls.pos; markLast.t = ls.t end
+		pos = markLast.pos
+	end
+	if not pos then
+		markHide()
+		markInfo.Text = "Target: " .. p.Name .. (c and " (out of stream range, not seen yet)" or " (no char)")
 		return
 	end
-	if markHL.Adornee ~= c then markHL.Adornee = c end
-	if markBB.Adornee ~= r then markBB.Adornee = r end
-	markHL.Enabled = true; markBB.Enabled = true
 	local myRoot = rootOf(lp)
-	local d = myRoot and math.floor((r.Position - myRoot.Position).Magnitude) or 0
-	markLbl.Text = "◆ " .. p.DisplayName .. " ◆\n" .. d .. "m"
-	markInfo.Text = "Target: " .. p.Name .. "  " .. d .. "m"
+	local d = myRoot and math.floor((pos - myRoot.Position).Magnitude) or 0
+	local age = markLast.t and math.floor(os.clock() - markLast.t) or nil
+	local stale = not live
+	local col = stale and Color3.fromRGB(200, 160, 120) or Color3.fromRGB(255, 90, 90)
+	local ageTxt = stale and (age and ("last seen " .. age .. "s ago") or "last known pos") or nil
+	markInfo.Text = "Target: " .. p.Name .. "  " .. d .. "m" .. (ageTxt and ("  (" .. ageTxt .. ")") or "")
 
 	local vp = cam.ViewportSize
-	local sp, onScreen = cam:WorldToViewportPoint(r.Position)
+	local sp, onScreen = cam:WorldToViewportPoint(pos + Vector3.new(0, stale and 0 or 3.5, 0))
 	if onScreen and sp.Z > 0 then
 		arrow.Visible = false
+		markLbl.Position = UDim2.fromOffset(sp.X, sp.Y - 6); markLbl.TextColor3 = col
+		markLbl.Text = "◆ " .. p.DisplayName .. " ◆\n" .. d .. "m" .. (ageTxt and ("  · " .. ageTxt) or "")
+		markLbl.Visible = true
+		markDot.Position = UDim2.fromOffset(sp.X, sp.Y); markDot.BackgroundColor3 = col; markDot.Visible = stale
 	else
+		markLbl.Visible = false; markDot.Visible = false
+		arrow.TextColor3 = col
 		local center = vp / 2
 		local dir = Vector2.new(sp.X, sp.Y) - center
 		if sp.Z < 0 then dir = -dir end
