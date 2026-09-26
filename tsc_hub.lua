@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -683,6 +683,38 @@ dropdown(S_aimT, "Aim Type", { "Mouse", "Camera" }, state.aimType, function(i) s
 toggle(S_aimT, "Rage Method", "aimRage", function() end)
 dropdown(S_aimT, "Type", { "Camera Teleport", "Mouse Flick" }, state.aimRageType, function(i) state.aimRageType = i end, "aimRageType")
 local aimStatus = info(S_aimT, "Target: -")
+
+-- No Visual Recoil: LocalGunScript feuert beim Schuss das lokale BindableEvent Remotes.ShootRecoil; einziger Listener
+-- ist PlayerScripts.VisualGun (Feder, die Camera.CFrame hochkickt). Diese Verbindung deaktivieren -> kein Kamera-Kick.
+-- Treffer/Spread unberührt, nichts geht an den Server; beim Ausschalten wieder Enable().
+state.norecoil = sv("norecoil", false)
+local S_gun = section(sub.Aimbot[2], "Gun Mods")
+local recoilDisabled = false
+local function applyRecoil()
+	local rem = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+	local ev = rem and rem:FindFirstChild("ShootRecoil")
+	if not ev or typeof(getconnections) ~= "function" then return nil end
+	local ok, cs = pcall(getconnections, ev.Event)
+	if not ok then return nil end
+	for _, c in ipairs(cs) do
+		if state.norecoil then pcall(function() c:Disable() end)
+		elseif recoilDisabled then pcall(function() c:Enable() end) end
+	end
+	recoilDisabled = state.norecoil
+	return #cs
+end
+local recoilInfo
+toggle(S_gun, "No Visual Recoil", "norecoil", function() applyRecoil() end)
+recoilInfo = info(S_gun, "")
+task.spawn(function()
+	while H.alive do
+		-- VisualGun kann neu verbinden (Respawn/Neustart) -> regelmäßig nachziehen
+		local n = applyRecoil()
+		recoilInfo.Text = state.norecoil and (n and ('<font color="#78ff8c">camera kick off</font> (%d listener)'):format(n) or "ShootRecoil not found") or ""
+		task.wait(2)
+	end
+end)
+table.insert(H.conns, { Disconnect = function() if recoilDisabled then state.norecoil = false; pcall(applyRecoil) end end })
 info(S_aimT, "Hold the aim key. Rage = instant snap, ignores FOV + visible check.")
 info(S_aimT, "Mouse 3 works natively. Mouse 4/5: run tools/MouseBridge.exe (maps them to F13/F14 while Roblox is focused), then click the key box and press the side button.")
 
