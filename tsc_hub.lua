@@ -25,7 +25,7 @@ if type(saved) ~= "table" then saved = {} end
 local function sv(k, def) if saved[k] ~= nil then return saved[k] end return def end
 local function kc(n, def) local ok, k = pcall(function() return Enum.KeyCode[n] end) return (ok and k) or def end
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
-	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace" }
+	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -280,6 +280,8 @@ local S_staff = section(visR, "Staff Radar")
 local S_vent = section(miscL, "Auto Vent")
 local S_ms = section(miscL, "Auto Hack (Minesweeper)")
 local S_move = section(miscR, "Movement")
+local S_world = section(miscR, "World")
+local S_pkg = section(miscR, "Packages (Dead Drops)")
 local S_menu = section(optL, "Menu")
 local S_perf = section(optR, "Performance")
 local S_cfg = section(cfgL, "Config")
@@ -620,6 +622,46 @@ con(RunService.Heartbeat, function(dt)
 	local hit = workspace:Raycast(r.Position, Vector3.new(0, -look, 0), fallParams)
 	if hit then
 		r.AssemblyLinearVelocity = Vector3.new(v.X, -FALL_CAP, v.Z)
+	end
+end)
+
+-- ================= TURRET WIPE =================
+-- workspace.EOP.TurretsFolder: vorhandene Turrets lokal löschen + neu gestreamte/gespawnte beim Erscheinen.
+-- Rein clientseitig (Destroy), keine Remotes. Beim Ausschalten kommen gelöschte erst per Re-Stream/Rejoin zurück.
+state.turrets = sv("turrets", false)
+local turretConn, turretFolder, turretKilled = nil, nil, 0
+local function killTurret(t)
+	if t:IsA("Model") or t:IsA("BasePart") then
+		if pcall(function() t:Destroy() end) then turretKilled = turretKilled + 1 end
+	end
+end
+local function turretStop()
+	if turretConn then turretConn:Disconnect(); turretConn = nil end
+	turretFolder = nil
+end
+local function turretStart(folder)
+	turretStop()
+	turretFolder = folder
+	for _, t in ipairs(folder:GetChildren()) do killTurret(t) end
+	turretConn = folder.ChildAdded:Connect(killTurret)
+	table.insert(H.conns, turretConn)
+end
+toggle(S_world, "Delete Turrets", "turrets", function(on) if not on then turretStop() end end)
+local turretInfo = info(S_world, "Turrets: -")
+-- Ordner kann später geladen/ersetzt werden -> jede Sekunde prüfen
+task.spawn(function()
+	while H.alive do
+		local eop = workspace:FindFirstChild("EOP")
+		local f = eop and eop:FindFirstChild("TurretsFolder")
+		if state.turrets then
+			if f and f ~= turretFolder then turretStart(f) elseif not f then turretStop() end
+		end
+		if not state.turrets then
+			turretInfo.Text = "Turrets: " .. (f and (#f:GetChildren() .. " in folder") or "folder not loaded")
+		else
+			turretInfo.Text = ('Turrets: <font color="#f5a8de">%d deleted</font>%s'):format(turretKilled, f and "" or " · folder not loaded")
+		end
+		task.wait(1)
 	end
 end)
 
@@ -2271,12 +2313,169 @@ local function msBot()
 end
 task.spawn(msBot)
 
+-- ================= PAKETE / DEAD DROPS (Wegpunkt) =================
+-- Quests: RS.Values.Quests.DeadDrops.<NPC>.<Ort> (Payout/Risk/Distance/CurrentPlayer); angenommen = lp.CurrentQuest.
+-- Ziel-Part workspace.DeadDropLocations[<Ort>] streamt erst in der Nähe -> bis dahin Näherung (Region/Kamera),
+-- danach exakte Position, dauerhaft gelernt in tsc_deaddrops.json. Anzeige rein 2D (keine Welt-Instanzen).
+local DD_FILE = "tsc_deaddrops.json"
+local ddLearned = {}
+pcall(function() if isfile(DD_FILE) then ddLearned = HttpService:JSONDecode(readfile(DD_FILE)) end end)
+if type(ddLearned) ~= "table" then ddLearned = {} end
+-- Näherungen: Region-Boxen/Security-Kameras, gegen Quest-"Distance" plausibilisiert
+local DD_HINTS = {
+	["Centrifuge Control Room"] = { 1072, -158, 624 },
+	["SteeleTown"] = { -259, 54, 93 },
+	["AD Offices"] = { -600, 71, 410 },
+	["CISCZ Kitchen"] = { 559, -141, 1247 },
+	["U&M Spawn"] = { -340, 50, 105 },
+	["S2 Commons Vent"] = { 1059, 26, -122 },
+	["MD Spawn"] = { -86, 36, 273 },
+	["Security Storage Entrance"] = { 989, 12, -62 },
+	["Tram Platform A"] = { 284, 20, 57 },
+	["S2 Staff Break Room"] = { 983, 10, -25 },
+	["Classroom Wing"] = { 889, 62, -341 },
+	["TSCZ Cargo Elevator"] = { 1494, 40, -513 },
+	["TSCZ Cargo Dropoff"] = { 913, 80, -563 },
+	["S1 Bridge"] = { -715, 87, 47 },
+	["Solitary Confinement"] = { 1557.8, 70.5, -394 },
+	["TSCZ Viewing Area"] = { 1556.4, 87.3, -246.6 },
+	["Parkour Chute"] = { 1693.9, 204.1, -144 },
+}
+local function ddSave() pcall(writefile, DD_FILE, HttpService:JSONEncode(ddLearned)) end
+local function ddLearn(part)
+	if not part:IsA("BasePart") then return end
+	local p = part.Position
+	local old = ddLearned[part.Name]
+	if not old or math.abs(old[1] - p.X) + math.abs(old[2] - p.Y) + math.abs(old[3] - p.Z) > 1 then
+		ddLearned[part.Name] = { p.X, p.Y, p.Z }; ddSave()
+	end
+end
+local ddFolder = workspace:FindFirstChild("DeadDropLocations")
+if ddFolder then
+	for _, c in ipairs(ddFolder:GetChildren()) do ddLearn(c) end
+	con(ddFolder.ChildAdded, function(c) task.defer(ddLearn, c) end)
+end
+local function ddTarget(name)
+	local live = ddFolder and ddFolder:FindFirstChild(name)
+	if live and live:IsA("BasePart") then return live.Position, "exakt" end
+	local l = ddLearned[name]; if l then return Vector3.new(l[1], l[2], l[3]), "gelernt" end
+	local h = DD_HINTS[name]; if h then return Vector3.new(h[1], h[2], h[3]), "ca." end
+	return nil, "unbekannt"
+end
+local function ddQuests()
+	local out = {}
+	local root = game:GetService("ReplicatedStorage"):FindFirstChild("Values")
+	root = root and root:FindFirstChild("Quests"); root = root and root:FindFirstChild("DeadDrops")
+	if not root then return out end
+	for _, npc in ipairs(root:GetChildren()) do
+		for _, q in ipairs(npc:GetChildren()) do
+			local function v(n) local o = q:FindFirstChild(n) return o and o.Value end
+			out[#out + 1] = { obj = q, name = q.Name, npc = npc.Name, pay = v("Payout") or 0, risk = v("Risk") or 0, who = v("CurrentPlayer") }
+		end
+	end
+	table.sort(out, function(a, b) return a.pay > b.pay end)
+	return out
+end
+
+state.pkgSel = sv("pkgSel", nil)
+local pkgInfo = info(S_pkg, "No package selected", T.accent)
+local pkgList = Instance.new("ScrollingFrame")
+pkgList.Size = UDim2.new(1, 0, 0, 220); pkgList.BackgroundColor3 = T.bg; pkgList.BorderSizePixel = 0; pkgList.ScrollBarThickness = 2
+pkgList.ScrollBarImageColor3 = T.accent; pkgList.LayoutOrder = nextOrder(S_pkg)
+pkgList.AutomaticCanvasSize = Enum.AutomaticSize.Y; pkgList.CanvasSize = UDim2.new(); pkgList.Parent = S_pkg.f
+stroke(pkgList)
+local pkgLay = Instance.new("UIListLayout", pkgList); pkgLay.Padding = UDim.new(0, 1); pkgLay.SortOrder = Enum.SortOrder.LayoutOrder
+local lastPkgSig = ""
+button(S_pkg, "Clear Waypoint", function() state.pkgSel = nil; lastPkgSig = "" end)
+
+local function rebuildPkg()
+	local qs = ddQuests()
+	local cq = lp:FindFirstChild("CurrentQuest")
+	local mine = cq and cq.Value and cq.Value.Name
+	local mineObj = cq and cq.Value
+	local sig = (mine or "") .. "|" .. tostring(state.pkgSel)
+	for _, q in ipairs(qs) do sig = sig .. q.name .. q.npc .. q.pay .. tostring(q.who) end
+	if sig == lastPkgSig then return end
+	lastPkgSig = sig
+	for _, c in ipairs(pkgList:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+	for i, q in ipairs(qs) do
+		local _, kind = ddTarget(q.name)
+		local sel, own = state.pkgSel == q.name, mineObj == q.obj
+		local b = Instance.new("TextButton")
+		b.LayoutOrder = i; b.Size = UDim2.new(1, -4, 0, 30); b.BorderSizePixel = 0; b.AutoButtonColor = false
+		b.BackgroundColor3 = sel and Color3.fromRGB(70, 38, 60) or T.bg; b.BackgroundTransparency = sel and 0 or 1
+		b.Font = T.font; b.TextSize = 12; b.TextXAlignment = Enum.TextXAlignment.Left; b.TextTruncate = Enum.TextTruncate.AtEnd
+		b.TextColor3 = own and Color3.fromRGB(120, 255, 140) or (sel and T.accent or T.text)
+		local npcShort = q.npc:gsub("'s Dead Drops", "")
+		b.Text = (" %s%s  [%s]\n $%d · risk %d · %s · %s"):format(own and "> " or "", q.name, npcShort,
+			q.pay, q.risk, q.who and ("taken: " .. q.who.Name) or "free", kind)
+		b.Parent = pkgList
+		b.MouseButton1Click:Connect(function() state.pkgSel = (state.pkgSel == q.name) and nil or q.name; lastPkgSig = "" end)
+	end
+end
+
+-- Wegpunkt-Overlay (2D-Projektion)
+local wpLbl = Instance.new("TextLabel")
+wpLbl.AnchorPoint = Vector2.new(0.5, 1); wpLbl.Size = UDim2.fromOffset(220, 36); wpLbl.BackgroundTransparency = 1
+wpLbl.Font = Enum.Font.GothamBold; wpLbl.TextSize = 14; wpLbl.TextStrokeTransparency = 0.2; wpLbl.Visible = false; wpLbl.Parent = gui
+local wpDot = Instance.new("Frame")
+wpDot.AnchorPoint = Vector2.new(0.5, 0.5); wpDot.Size = UDim2.fromOffset(12, 12); wpDot.BorderSizePixel = 0
+wpDot.Rotation = 45; wpDot.Visible = false; wpDot.Parent = gui
+local wpArrow = Instance.new("TextLabel")
+wpArrow.AnchorPoint = Vector2.new(0.5, 0.5); wpArrow.Size = UDim2.fromOffset(200, 36); wpArrow.BackgroundTransparency = 1
+wpArrow.Font = Enum.Font.GothamBold; wpArrow.TextSize = 14; wpArrow.TextStrokeTransparency = 0.2; wpArrow.Visible = false; wpArrow.Parent = gui
+
+local autoSel = nil
+con(RunService.RenderStepped, function()
+	-- angenommene Quest automatisch wählen
+	local cq = lp:FindFirstChild("CurrentQuest")
+	local mine = cq and cq.Value and cq.Value.Name
+	if mine and autoSel ~= mine then autoSel = mine; state.pkgSel = mine; lastPkgSig = "" end
+	if not mine and autoSel then if state.pkgSel == autoSel then state.pkgSel = nil end autoSel = nil; lastPkgSig = "" end
+
+	local name = state.pkgSel
+	local pos, kind
+	if name then pos, kind = ddTarget(name) end
+	if not pos then
+		wpLbl.Visible = false; wpDot.Visible = false; wpArrow.Visible = false
+		pkgInfo.Text = name and ("Target: " .. name .. " (position unknown)") or "No package selected"
+		return
+	end
+	local myRoot = rootOf(lp)
+	local d = myRoot and math.floor((pos - myRoot.Position).Magnitude) or 0
+	local dy = myRoot and math.floor(pos.Y - myRoot.Position.Y) or 0
+	local col = (kind == "ca.") and Color3.fromRGB(255, 170, 60) or Color3.fromRGB(90, 255, 120)
+	local txt = ("📦 %s\n%s%dm  (%s%d Höhe)"):format(name, kind == "ca." and "ca. " or "", d, dy >= 0 and "+" or "", dy)
+	pkgInfo.Text = ("Target: %s  %dm  [%s]"):format(name, d, kind)
+	local vp = cam.ViewportSize
+	local sp, on = cam:WorldToViewportPoint(pos)
+	if on and sp.Z > 0 then
+		wpArrow.Visible = false
+		wpDot.Position = UDim2.fromOffset(sp.X, sp.Y); wpDot.BackgroundColor3 = col; wpDot.Visible = true
+		wpLbl.Position = UDim2.fromOffset(sp.X, sp.Y - 8); wpLbl.TextColor3 = col; wpLbl.Text = txt; wpLbl.Visible = true
+	else
+		wpLbl.Visible = false; wpDot.Visible = false
+		local center = vp / 2
+		local dir = Vector2.new(sp.X, sp.Y) - center
+		if sp.Z < 0 then dir = -dir end
+		if dir.Magnitude < 1 then dir = Vector2.new(0, -1) end
+		dir = dir.Unit
+		local m = 70
+		local sx = (center.X - m) / math.max(math.abs(dir.X), 1e-3)
+		local sy = (center.Y - m) / math.max(math.abs(dir.Y), 1e-3)
+		local p2 = center + dir * math.min(sx, sy)
+		wpArrow.Position = UDim2.fromOffset(p2.X, p2.Y); wpArrow.TextColor3 = col
+		wpArrow.Text = "📦 " .. name .. "\n" .. d .. "m"; wpArrow.Visible = true
+	end
+end)
+task.spawn(function() while H.alive do pcall(rebuildPkg) task.wait(1) end end)
+
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
 local CFG_FILE = "tsc_hub_config.json"
 local DEFAULTS = { fullbright = false, esp = false, espDist = 1500, espFade = 40, brightness = 2, items = false, perf = 1,
 	updInt = 0.2, nofall = false, staff = true, vent = true, ventPred = true, ventLog = true, ventBias = 0,
-	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0 }
+	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0, turrets = false }
 local cfgStatus
 local function saveCfg()
 	local data = { keys = {} }
