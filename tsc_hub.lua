@@ -505,10 +505,13 @@ local function applyFB()
 		if origLight[k] == nil then origLight[k] = Lighting[k] end
 		if Lighting[k] ~= v then pcall(function() Lighting[k] = v end) end
 	end
-	for _, o in ipairs(Lighting:GetChildren()) do
+	local fx = Lighting:GetChildren()
+	for _, o in ipairs(workspace.CurrentCamera:GetChildren()) do fx[#fx + 1] = o end
+	for _, o in ipairs(fx) do
 		if o:IsA("Atmosphere") then
 			if not disabledFx[o] then disabledFx[o] = { Density = o.Density, Haze = o.Haze } end
-			o.Density = 0; o.Haze = 0
+			if o.Density ~= 0 then o.Density = 0 end
+			if o.Haze ~= 0 then o.Haze = 0 end
 		elseif (o:IsA("ColorCorrectionEffect") or o:IsA("BloomEffect") or o:IsA("BlurEffect")) and o.Enabled then
 			if not disabledFx[o] then disabledFx[o] = { Enabled = true } end
 			o.Enabled = false
@@ -577,7 +580,50 @@ task.spawn(function()
 	end
 end)
 
+-- Anti-Flackern: Das Spiel setzt ClockTime ~2x/s auf 0 (Nacht) und Zonen-Lighting neu. Statt alle 0,5 s nachzuziehen
+-- (dazwischen sichtbar) wird jede Änderung im selben Frame per Changed zurückgesetzt -> nie gerendert.
+do
+local lightBusy = false
+local function enforce(o, prop, want)
+	if lightBusy then return end
+	local ok, cur = pcall(function() return o[prop] end)
+	if ok and cur ~= want then
+		lightBusy = true
+		pcall(function() o[prop] = want end)
+		lightBusy = false
+	end
+end
+con(Lighting.Changed, function(prop)
+	if state.fullbright and LPROPS[prop] ~= nil then enforce(Lighting, prop, LPROPS[prop])
+	elseif state.nofog and (prop == "FogEnd" or prop == "FogStart") then enforce(Lighting, prop, 1e6) end
+end)
+local FX_KILL = { ColorCorrectionEffect = true, BloomEffect = true, BlurEffect = true }
+local fxWatched = setmetatable({}, { __mode = "k" })
+local function watchFx(o)
+	if fxWatched[o] or not (o:IsA("Atmosphere") or FX_KILL[o.ClassName]) then return end
+	fxWatched[o] = true
+	con(o.Changed, function(prop)
+		if o:IsA("Atmosphere") then
+			if (prop == "Density" or prop == "Haze") and (state.fullbright or state.nofog) then enforce(o, prop, 0) end
+		elseif prop == "Enabled" and state.fullbright and o.Enabled then
+			if not disabledFx[o] then disabledFx[o] = { Enabled = true } end
+			enforce(o, "Enabled", false)
+		end
+	end)
+end
+local function fxAdded(o)
+	watchFx(o)
+	if state.fullbright then task.defer(function() pcall(applyFB) end) end
+	if state.nofog then task.defer(function() pcall(applyNoFog) end) end
+end
+for _, o in ipairs(Lighting:GetChildren()) do watchFx(o) end
+for _, o in ipairs(workspace.CurrentCamera:GetChildren()) do watchFx(o) end
+con(Lighting.ChildAdded, fxAdded)
+con(workspace.CurrentCamera.ChildAdded, fxAdded)
+end
+
 -- ================= COMBAT / AIMBOT =================
+do
 -- Hook-frei, keine Remotes: Maus-Modus = mousemoverel (echter Input), Kamera-Modus = Camera.CFrame nach dem
 -- Kamera-Update (BindToRenderStep Camera+1). Zielwahl: nächster Spieler zum FOV-Mittelpunkt (Bildschirm).
 state.aim = sv("aim", false); state.aimTeam = sv("aimTeam", true); state.aimVis = sv("aimVis", true)
@@ -796,6 +842,7 @@ task.spawn(function()
 		task.wait(0.2)
 	end
 end)
+end
 
 -- ================= ESP =================
 local espObjs = {} -- [player] = {bb=, lbl=}
