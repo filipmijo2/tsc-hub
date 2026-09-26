@@ -35,7 +35,7 @@ local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDow
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
-	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" }
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -2996,12 +2996,29 @@ local alarmFolders = {}
 local function isAlarmFolder(n)
 	return n:find("Detect") or n:find("Sensor") or n == "LaserGates" or n == "TeslaGates" or n == "MaxiBurgerSystems"
 end
+-- Trigger lokal entschärfen: Touches des eigenen (client-owned) Chars meldet der Client -> CanTouch=false lokal
+-- = kein Touch-Event = Server-TeamDetector feuert nicht. Reversibel; Alarm-Sound bleibt zum Gegenprüfen.
+state.alarmOff = sv("alarmOff", false)
+local alarmLive = {} -- [TeamDetect-Part] = true (stark: weak keys würden Instance-Wrapper verlieren)
+local function alarmDisarm(d)
+	if state.alarmOff then
+		if d:GetAttribute("TSC_OrigCanTouch") == nil then d:SetAttribute("TSC_OrigCanTouch", d.CanTouch) end
+		d.CanTouch = false
+	elseif d:GetAttribute("TSC_OrigCanTouch") ~= nil then
+		d.CanTouch = d:GetAttribute("TSC_OrigCanTouch"); d:SetAttribute("TSC_OrigCanTouch", nil)
+	end
+end
+local function alarmSeen(d)
+	alarmLive[d] = true
+	alarmLearn(d)
+	pcall(alarmDisarm, d)
+end
 local function hookAlarmFolder(f)
 	if alarmFolders[f] then return end
 	alarmFolders[f] = true
-	for _, d in ipairs(f:GetDescendants()) do if d:IsA("BasePart") and d.Name == "TeamDetect" then alarmLearn(d) end end
+	for _, d in ipairs(f:GetDescendants()) do if d:IsA("BasePart") and d.Name == "TeamDetect" then alarmSeen(d) end end
 	con(f.DescendantAdded, function(d)
-		if d:IsA("BasePart") and d.Name == "TeamDetect" then task.defer(alarmLearn, d) end
+		if d:IsA("BasePart") and d.Name == "TeamDetect" then task.defer(alarmSeen, d) end
 	end)
 end
 for _, f in ipairs(workspace:GetChildren()) do if isAlarmFolder(f.Name) then hookAlarmFolder(f) end end
@@ -3049,6 +3066,9 @@ slider(S_alarm, "Max Distance", 50, 3000, state.alarmDist, function(v)
 	state.alarmDist = math.floor(v)
 	return state.alarmDist .. "m"
 end, "alarmDist")
+toggle(S_alarm, "Disable Triggers (local)", "alarmOff", function()
+	for d in pairs(alarmLive) do if d.Parent then pcall(alarmDisarm, d) else alarmLive[d] = nil end end
+end)
 local alarmInfo = info(S_alarm, "")
 info(S_alarm, '<font color="#ff3c3c">Motion</font> · <font color="#ff9628">Laser</font> · <font color="#aa5aff">Tesla</font> · <font color="#ffdc3c">MaxiBurger</font> – box = exact trigger volume. Zones are learned when loaded once (workspace/' .. ALARM_FILE .. ').')
 task.spawn(function()
@@ -3075,9 +3095,18 @@ task.spawn(function()
 					clearAlarm(key)
 				end
 			end
-			alarmInfo.Text = ("%d/%d known zones shown%s%s"):format(shown, total,
+			-- welche geladenen Alarme laufen gerade (Sound-State kommt vom Server)
+			local playing = {}
+			for d in pairs(alarmLive) do
+				if not d.Parent then alarmLive[d] = nil end
+				local snd = d.Parent and d:FindFirstChild("Alarm")
+				if snd and snd:IsA("Sound") and snd.Playing then playing[#playing + 1] = alarmName(d, alarmKind(d)) end
+			end
+			alarmInfo.Text = ("%d/%d known zones shown%s%s%s%s"):format(shown, total,
 				near and (" · nearest: " .. near .. " " .. math.floor(nearD) .. "m") or "",
-				insideAny and ('\n<font color="#ff3c3c">INSIDE: ' .. insideAny .. "</font>") or "")
+				insideAny and ('\n<font color="#ff3c3c">INSIDE: ' .. insideAny .. "</font>") or "",
+				state.alarmOff and '\n<font color="#78ff8c">triggers disarmed (local)</font>' or "",
+				#playing > 0 and ('\n<font color="#ff3c3c">ALARM SOUNDING: ' .. table.concat(playing, ", ") .. "</font>") or "")
 		end
 		task.wait(math.max(0.5, state.updInt or 0.5))
 	end
