@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -3473,6 +3473,74 @@ task.spawn(function()
 		task.wait(1)
 	end
 end)
+
+-- ================= RADIO SPY =================
+-- Remotes.RadioHistory:InvokeServer() (ohne Args) liefert die letzten 20 Funknachrichten der "gehörten" Kanäle
+-- (Main) – auch ohne Funkgerät / als Test Subject. Pollen alle 4s (wie das Spiel selbst), Dedupe, Anzeige im
+-- Players-Tab + optionales Overlay unten links.
+state.radioSpy = sv("radioSpy", false)
+state.radioOverlay = sv("radioOverlay", false)
+do
+	local CHANNELS = { "Main", "Surface", "QA Dev Gaming" }
+	local S_radio = section(plR, "Radio Spy")
+	local log, seenKey = {}, {}
+	local MAXLOG = 40
+	local function esc(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+	toggle(S_radio, "Read Radio (Main)", "radioSpy", function() end)
+	toggle(S_radio, "Overlay", "radioOverlay", function() end)
+	local radioInfo = info(S_radio, "")
+	local ov = Instance.new("TextLabel")
+	ov.AnchorPoint = Vector2.new(0, 1); ov.Position = UDim2.new(0, 12, 1, -120); ov.Size = UDim2.fromOffset(460, 0)
+	ov.AutomaticSize = Enum.AutomaticSize.Y; ov.BackgroundColor3 = Color3.fromRGB(10, 10, 12); ov.BackgroundTransparency = 0.35
+	ov.Font = Enum.Font.Code; ov.TextSize = 13; ov.RichText = true; ov.TextWrapped = true; ov.TextColor3 = Color3.fromRGB(230, 230, 230)
+	ov.TextXAlignment = Enum.TextXAlignment.Left; ov.TextYAlignment = Enum.TextYAlignment.Top; ov.Visible = false; ov.Parent = gui
+	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
+	local pad = Instance.new("UIPadding", ov); pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
+	pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+	local function render()
+		local function lines(n)
+			local t = {}
+			for i = math.max(1, #log - n + 1), #log do
+				local m = log[i]
+				t[#t + 1] = ('<font color="#767676">[%s] %s</font> <font color="#f5a8de">%s</font>: %s'):format(
+					esc(m.Date), esc(CHANNELS[m.Channel] or m.Channel), esc(m.Sender), esc(m.Message))
+			end
+			return table.concat(t, "\n")
+		end
+		radioInfo.Text = #log > 0 and lines(14) or "no messages yet"
+		ov.Text = '<font color="#f5a8de">RADIO</font>\n' .. (#log > 0 and lines(7) or "...")
+	end
+	task.spawn(function()
+		while H.alive do
+			if state.radioSpy then
+				local ok, h = pcall(function() return game:GetService("ReplicatedStorage").Remotes.RadioHistory:InvokeServer() end)
+				if ok and type(h) == "table" and type(h.history) == "table" then
+					local fresh = {}
+					for ch, list in pairs(h.history) do
+						for _, m in ipairs(list) do
+							local k = tostring(ch) .. "|" .. tostring(m.Date) .. "|" .. tostring(m.Sender) .. "|" .. tostring(m.Message)
+							if not seenKey[k] then
+								seenKey[k] = true
+								fresh[#fresh + 1] = { Date = m.Date, Sender = m.Sender, Message = m.Message, Channel = m.Channel or ch }
+							end
+						end
+					end
+					table.sort(fresh, function(a, b) return tostring(a.Date) < tostring(b.Date) end)
+					for _, m in ipairs(fresh) do log[#log + 1] = m end
+					while #log > MAXLOG do table.remove(log, 1) end
+				elseif not ok then
+					radioInfo.Text = "RadioHistory failed: " .. esc(h)
+				end
+				render()
+				ov.Visible = state.radioOverlay
+			else
+				ov.Visible = false
+				radioInfo.Text = ""
+			end
+			task.wait(4)
+		end
+	end)
+end
 
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
