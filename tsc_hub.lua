@@ -16,7 +16,7 @@ local cam = workspace.CurrentCamera
 
 local function con(sig, fn) local c = sig:Connect(fn) table.insert(H.conns, c) return c end
 
-local state = { fullbright = false, esp = false, espDist = 1500, markId = nil, markName = nil }
+local state = { fullbright = false, esp = false, espDist = 1500, espFade = 0.4, markId = nil, markName = nil }
 
 -- ================= GUI =================
 local gui = Instance.new("ScreenGui")
@@ -27,7 +27,7 @@ gui.Parent = CoreGui
 local espFolder = Instance.new("Folder"); espFolder.Name = "TSC_ESP"; espFolder.Parent = gui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(260, 420); main.Position = UDim2.fromOffset(40, 200)
+main.Size = UDim2.fromOffset(260, 480); main.Position = UDim2.fromOffset(40, 200)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 28); main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
@@ -133,40 +133,28 @@ mkToggle(72, "ESP (Name/Team/Dist)", "esp", function(on)
 	if not on then for p in pairs(espObjs) do removeEsp(p) end end
 end)
 
--- Helligkeits-Slider (Fullbright): 0..10 -> Brightness + ExposureCompensation
-do
-	local MINB, MAXB = 0, 10
+-- Slider-Helper: Label bei y, Balken darunter; onSet(v) liefert Anzeigetext
+local function mkSlider(y, minV, maxV, init, color, onSet)
 	local lbl = Instance.new("TextLabel")
-	lbl.Size = UDim2.new(1, -16, 0, 14); lbl.Position = UDim2.fromOffset(8, 104)
+	lbl.Size = UDim2.new(1, -16, 0, 14); lbl.Position = UDim2.fromOffset(8, y)
 	lbl.BackgroundTransparency = 1; lbl.Font = Enum.Font.Gotham; lbl.TextSize = 12
 	lbl.TextColor3 = Color3.fromRGB(220, 220, 220); lbl.TextXAlignment = Enum.TextXAlignment.Left
 	lbl.Parent = main
 	local bar = Instance.new("Frame")
-	bar.Size = UDim2.new(1, -16, 0, 10); bar.Position = UDim2.fromOffset(8, 124)
+	bar.Size = UDim2.new(1, -16, 0, 10); bar.Position = UDim2.fromOffset(8, y + 18)
 	bar.BackgroundColor3 = Color3.fromRGB(55, 58, 68); bar.BorderSizePixel = 0; bar.Active = true; bar.Parent = main
 	Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
 	local fill = Instance.new("Frame")
-	fill.BackgroundColor3 = Color3.fromRGB(255, 200, 60); fill.BorderSizePixel = 0; fill.Parent = bar
+	fill.BackgroundColor3 = color; fill.BorderSizePixel = 0; fill.Parent = bar
 	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
-	local function setB(v)
-		v = math.clamp(v, MINB, MAXB)
-		LPROPS.Brightness = v
-		-- unter 2: Ambient + Belichtung mit absenken -> bis fast schwarz runterregelbar
-		if v < 2 then
-			local g = v / 2
-			LPROPS.Ambient = Color3.new(g, g, g); LPROPS.OutdoorAmbient = Color3.new(g, g, g)
-			LPROPS.ExposureCompensation = -3 * (1 - g)
-		else
-			LPROPS.Ambient = Color3.new(1, 1, 1); LPROPS.OutdoorAmbient = Color3.new(1, 1, 1)
-			LPROPS.ExposureCompensation = math.clamp((v - 2) / 3, 0, 2.5)
-		end
-		fill.Size = UDim2.new((v - MINB) / (MAXB - MINB), 0, 1, 0)
-		lbl.Text = ("Helligkeit: %.1f"):format(v)
-		if state.fullbright then pcall(applyFB) end
+	local function set(v)
+		v = math.clamp(v, minV, maxV)
+		fill.Size = UDim2.new((v - minV) / (maxV - minV), 0, 1, 0)
+		lbl.Text = onSet(v)
 	end
-	setB(2)
+	set(init)
 	local sliding = false
-	local function fromX(x) setB(MINB + (x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X * (MAXB - MINB)) end
+	local function fromX(x) set(minV + (x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X * (maxV - minV)) end
 	con(bar.InputBegan, function(i)
 		if i.UserInputType == Enum.UserInputType.MouseButton1 then sliding = true; fromX(i.Position.X) end
 	end)
@@ -175,6 +163,32 @@ do
 	end)
 	con(UIS.InputEnded, function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then sliding = false end end)
 end
+
+-- Helligkeit (Fullbright): 0..10 -> Brightness + ExposureCompensation
+mkSlider(104, 0, 10, 2, Color3.fromRGB(255, 200, 60), function(v)
+	LPROPS.Brightness = v
+	-- unter 2: Ambient + Belichtung mit absenken -> bis fast schwarz runterregelbar
+	if v < 2 then
+		local g = v / 2
+		LPROPS.Ambient = Color3.new(g, g, g); LPROPS.OutdoorAmbient = Color3.new(g, g, g)
+		LPROPS.ExposureCompensation = -3 * (1 - g)
+	else
+		LPROPS.Ambient = Color3.new(1, 1, 1); LPROPS.OutdoorAmbient = Color3.new(1, 1, 1)
+		LPROPS.ExposureCompensation = math.clamp((v - 2) / 3, 0, 2.5)
+	end
+	if state.fullbright then pcall(applyFB) end
+	return ("Helligkeit: %.1f"):format(v)
+end)
+
+-- ESP-Reichweite + Fade-Zone (letzte X % der Reichweite blenden aus)
+mkSlider(138, 25, 3000, state.espDist, Color3.fromRGB(80, 170, 255), function(v)
+	state.espDist = math.floor(v)
+	return "ESP-Reichweite: " .. state.espDist .. "m"
+end)
+mkSlider(172, 0, 100, state.espFade * 100, Color3.fromRGB(150, 110, 255), function(v)
+	state.espFade = v / 100
+	return ("ESP-Fade: letzte %d%% der Reichweite"):format(math.floor(v))
+end)
 
 -- ================= MARKER =================
 local markHL = Instance.new("Highlight")
@@ -200,26 +214,26 @@ arrow.Font = Enum.Font.GothamBlack; arrow.TextSize = 16; arrow.TextColor3 = Colo
 arrow.TextStrokeTransparency = 0; arrow.Visible = false; arrow.Parent = gui
 
 local markInfo = Instance.new("TextLabel")
-markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 146)
+markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 208)
 markInfo.BackgroundTransparency = 1; markInfo.Font = Enum.Font.Gotham; markInfo.TextSize = 13
 markInfo.TextColor3 = Color3.fromRGB(255, 120, 120); markInfo.TextXAlignment = Enum.TextXAlignment.Left
 markInfo.Text = "Marker: -"; markInfo.Parent = main
 
 local clearBtn = Instance.new("TextButton")
-clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 146)
+clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 208)
 clearBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40); clearBtn.BorderSizePixel = 0; clearBtn.Font = Enum.Font.Gotham
 clearBtn.TextSize = 12; clearBtn.TextColor3 = Color3.new(1, 1, 1); clearBtn.Text = "weg"; clearBtn.Parent = main
 Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 5)
 
 local search = Instance.new("TextBox")
-search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 172)
+search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 234)
 search.BackgroundColor3 = Color3.fromRGB(40, 42, 50); search.BorderSizePixel = 0; search.Font = Enum.Font.Gotham
 search.TextSize = 13; search.TextColor3 = Color3.new(1, 1, 1); search.PlaceholderText = "Spieler suchen..."
 search.Text = ""; search.ClearTextOnFocus = false; search.Parent = main
 Instance.new("UICorner", search).CornerRadius = UDim.new(0, 5)
 
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, -16, 1, -210); list.Position = UDim2.fromOffset(8, 202)
+list.Size = UDim2.new(1, -16, 1, -272); list.Position = UDim2.fromOffset(8, 264)
 list.BackgroundColor3 = Color3.fromRGB(28, 30, 36); list.BorderSizePixel = 0; list.ScrollBarThickness = 5
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y; list.CanvasSize = UDim2.new(); list.Parent = main
 local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.Name
@@ -282,6 +296,11 @@ task.spawn(function()
 							local hum = c:FindFirstChildOfClass("Humanoid")
 							local hp = hum and math.floor(hum.Health) or 0
 							e.lbl.TextColor3 = teamColor(p)
+							-- Fade: ab (1-espFade)*Reichweite linear ausblenden
+							local fs = state.espDist * (1 - state.espFade)
+							local a = (d > fs and state.espDist > fs) and math.clamp((d - fs) / (state.espDist - fs), 0, 1) or 0
+							e.lbl.TextTransparency = a * 0.95
+							e.lbl.TextStrokeTransparency = 0.3 + 0.7 * a
 							e.lbl.Text = p.DisplayName .. " [" .. (p.Team and p.Team.Name or "?") .. "]\n" .. math.floor(d) .. "m  HP " .. hp
 						else
 							removeEsp(p)
