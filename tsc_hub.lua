@@ -17,6 +17,7 @@ local cam = workspace.CurrentCamera
 local function con(sig, fn) local c = sig:Connect(fn) table.insert(H.conns, c) return c end
 
 local state = { fullbright = false, esp = false, espDist = 1500, espFade = 0.4, markId = nil, markName = nil }
+H.state = state
 
 -- ================= GUI =================
 local gui = Instance.new("ScreenGui")
@@ -27,7 +28,7 @@ gui.Parent = CoreGui
 local espFolder = Instance.new("Folder"); espFolder.Name = "TSC_ESP"; espFolder.Parent = gui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(260, 514); main.Position = UDim2.fromOffset(40, 200)
+main.Size = UDim2.fromOffset(260, 614); main.Position = UDim2.fromOffset(40, 200)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 28); main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
@@ -190,6 +191,88 @@ mkSlider(172, 0, 100, state.espFade * 100, Color3.fromRGB(150, 110, 255), functi
 	return ("ESP-Fade: letzte %d%% der Reichweite"):format(math.floor(v))
 end)
 
+-- ================= ITEM-ESP (gedroppte Tools) =================
+-- Spiel-Logik (PromptToolPickup): Tool direkt in workspace + Handle + CanBeDropped = aufhebbar
+state.items = false
+local itemObjs = {} -- [tool] = {bb=, lbl=}
+local function isDropped(t) return t:IsA("Tool") and t.Parent == workspace and t:FindFirstChild("Handle") ~= nil end
+local function clearItem(t) local o = itemObjs[t] if o then pcall(function() o.bb:Destroy() end) itemObjs[t] = nil end end
+mkToggle(240, "Dropped Items", "items", function(on) if not on then for t in pairs(itemObjs) do clearItem(t) end end end)
+con(workspace.ChildRemoved, function(t) clearItem(t) end)
+
+-- ================= PERFORMANCE =================
+-- Stufe 0 aus | 1 Schatten/Post-FX/Terrain-Deko aus | 2 + Partikel/Trails/Beams/Decals/Texturen weg | 3 + alles SmoothPlastic, Qualität min
+state.perf = 0; state.updInt = 0.2
+local perfCur, perfOrig = 0, setmetatable({}, { __mode = "k" })
+local function setp(o, k, v)
+	local t = perfOrig[o]
+	if not t then t = {} perfOrig[o] = t end
+	if t[k] == nil then t[k] = o[k] end
+	if o[k] ~= v then o[k] = v end
+end
+local FX2 = { ParticleEmitter = true, Trail = true, Beam = true, Smoke = true, Fire = true, Sparkles = true }
+local function perfOne(d, lvl)
+	if lvl >= 2 then
+		if FX2[d.ClassName] then setp(d, "Enabled", false)
+		elseif d:IsA("Decal") then setp(d, "Transparency", 1) end -- Texture erbt von Decal
+	end
+	if lvl >= 3 and d:IsA("BasePart") then
+		setp(d, "Material", Enum.Material.SmoothPlastic); setp(d, "Reflectance", 0); setp(d, "CastShadow", false)
+	end
+end
+local function perfLighting(lvl)
+	if lvl < 1 then return end
+	setp(Lighting, "GlobalShadows", false)
+	for _, o in ipairs(Lighting:GetChildren()) do
+		if (o:IsA("SunRaysEffect") or o:IsA("DepthOfFieldEffect") or o:IsA("BloomEffect") or o:IsA("BlurEffect")) and o.Enabled then setp(o, "Enabled", false) end
+	end
+	local ter = workspace:FindFirstChildOfClass("Terrain")
+	if ter then pcall(function() setp(ter, "Decoration", false); setp(ter, "WaterWaveSize", 0); setp(ter, "WaterReflectance", 0) end) end
+	if lvl >= 3 then pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end) end
+end
+local function perfRestore(chunked)
+	local old = perfOrig
+	perfOrig = setmetatable({}, { __mode = "k" })
+	local i = 0
+	for o, t in pairs(old) do
+		if o.Parent then for k, v in pairs(t) do pcall(function() o[k] = v end) end end
+		i = i + 1
+		if chunked and i % 1500 == 0 then task.wait() end
+	end
+	pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end)
+end
+mkSlider(274, 0, 3, 0, Color3.fromRGB(90, 220, 140), function(v)
+	state.perf = math.floor(v + 0.5)
+	return "Performance-Stufe: " .. state.perf .. ({ " (aus)", " (Schatten/FX)", " (+Partikel/Decals)", " (+Materialien)" })[state.perf + 1]
+end)
+mkSlider(308, 0.05, 1, state.updInt, Color3.fromRGB(200, 200, 200), function(v)
+	state.updInt = v
+	return ("Hub-Update: %.1f/s (weniger = mehr FPS)"):format(1 / v)
+end)
+-- Worker: Stufe wechseln (in Chunks, kein Freeze) + neue Instanzen (Regionen laden nach) mitnehmen
+con(workspace.DescendantAdded, function(d)
+	if perfCur >= 2 then task.defer(function() pcall(perfOne, d, perfCur) end) end
+end)
+task.spawn(function()
+	while H.alive do
+		if state.perf ~= perfCur then
+			local want = state.perf
+			perfRestore(true)
+			perfCur = want
+			if want >= 2 then
+				local all = workspace:GetDescendants()
+				for i = 1, #all do
+					if not H.alive or state.perf ~= want then break end
+					pcall(perfOne, all[i], want)
+					if i % 3000 == 0 then task.wait() end
+				end
+			end
+		end
+		pcall(perfLighting, perfCur)
+		task.wait(1)
+	end
+end)
+
 -- ================= MARKER =================
 local markHL = Instance.new("Highlight")
 markHL.Name = "TSC_MARK_HL"; markHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
@@ -214,26 +297,26 @@ arrow.Font = Enum.Font.GothamBlack; arrow.TextSize = 16; arrow.TextColor3 = Colo
 arrow.TextStrokeTransparency = 0; arrow.Visible = false; arrow.Parent = gui
 
 local markInfo = Instance.new("TextLabel")
-markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 242)
+markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 342)
 markInfo.BackgroundTransparency = 1; markInfo.Font = Enum.Font.Gotham; markInfo.TextSize = 13
 markInfo.TextColor3 = Color3.fromRGB(255, 120, 120); markInfo.TextXAlignment = Enum.TextXAlignment.Left
 markInfo.Text = "Marker: -"; markInfo.Parent = main
 
 local clearBtn = Instance.new("TextButton")
-clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 242)
+clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 342)
 clearBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40); clearBtn.BorderSizePixel = 0; clearBtn.Font = Enum.Font.Gotham
 clearBtn.TextSize = 12; clearBtn.TextColor3 = Color3.new(1, 1, 1); clearBtn.Text = "weg"; clearBtn.Parent = main
 Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 5)
 
 local search = Instance.new("TextBox")
-search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 268)
+search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 368)
 search.BackgroundColor3 = Color3.fromRGB(40, 42, 50); search.BorderSizePixel = 0; search.Font = Enum.Font.Gotham
 search.TextSize = 13; search.TextColor3 = Color3.new(1, 1, 1); search.PlaceholderText = "Spieler suchen..."
 search.Text = ""; search.ClearTextOnFocus = false; search.Parent = main
 Instance.new("UICorner", search).CornerRadius = UDim.new(0, 5)
 
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, -16, 1, -306); list.Position = UDim2.fromOffset(8, 298)
+list.Size = UDim2.new(1, -16, 1, -406); list.Position = UDim2.fromOffset(8, 398)
 list.BackgroundColor3 = Color3.fromRGB(28, 30, 36); list.BorderSizePixel = 0; list.ScrollBarThickness = 5
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y; list.CanvasSize = UDim2.new(); list.Parent = main
 local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.Name
@@ -311,7 +394,38 @@ task.spawn(function()
 				end
 			end
 		end
-		task.wait(0.2)
+		-- Dropped Items
+		if state.items then
+			local myRoot = rootOf(lp)
+			local myPos = myRoot and myRoot.Position or cam.CFrame.Position
+			for _, t in ipairs(workspace:GetChildren()) do
+				if isDropped(t) then
+					local h = t.Handle
+					local d = (h.Position - myPos).Magnitude
+					if d <= state.espDist then
+						local o = itemObjs[t]
+						if not o then
+							local bb = Instance.new("BillboardGui")
+							bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(160, 26); bb.StudsOffset = Vector3.new(0, 1.5, 0)
+							bb.LightInfluence = 0; bb.Parent = espFolder
+							local l = Instance.new("TextLabel")
+							l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+							l.TextSize = 12; l.TextColor3 = Color3.fromRGB(120, 255, 140); l.TextStrokeTransparency = 0.3; l.Parent = bb
+							o = { bb = bb, lbl = l }
+							itemObjs[t] = o
+						end
+						if o.bb.Adornee ~= h then o.bb.Adornee = h end
+						o.lbl.Text = "▣ " .. t.Name .. "  " .. math.floor(d) .. "m"
+						local fs = state.espDist * (1 - state.espFade)
+						local a = (d > fs and state.espDist > fs) and math.clamp((d - fs) / (state.espDist - fs), 0, 1) or 0
+						o.lbl.TextTransparency = a * 0.95
+					else
+						clearItem(t)
+					end
+				end
+			end
+		end
+		task.wait(state.updInt)
 	end
 end)
 
@@ -477,7 +591,7 @@ task.spawn(function()
 		else
 			staffPanel.Visible = false
 		end
-		task.wait(0.5)
+		task.wait(math.max(0.5, state.updInt))
 	end
 end)
 
@@ -491,6 +605,7 @@ function H.kill()
 	for _, c in ipairs(H.conns) do pcall(function() c:Disconnect() end) end
 	H.conns = {}
 	pcall(restoreFB)
+	pcall(perfRestore)
 	pcall(function() gui:Destroy() end)
 end
 
