@@ -24,11 +24,11 @@ pcall(function() if isfile(SAVE_FILE) then saved = HttpService:JSONDecode(readfi
 if type(saved) ~= "table" then saved = {} end
 local function sv(k, def) if saved[k] ~= nil then return saved[k] end return def end
 local function kc(n, def) local ok, k = pcall(function() return Enum.KeyCode[n] end) return (ok and k) or def end
-local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
+local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
-	espFade = sv("espFade", 0.4), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
+	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
 	keys = { menu = kc(sv("keyMenu", "RightShift"), Enum.KeyCode.RightShift), vent = kc(sv("keyVent", "End"), Enum.KeyCode.End) } }
 H.state = state
 
@@ -518,6 +518,22 @@ slider(S_esp, "Fade (last % of range)", 0, 100, state.espFade * 100, function(v)
 	state.espFade = v / 100
 	return math.floor(v) .. "/100"
 end, "espFade")
+-- Fade-Stärke: Transparenz = 1-(1-t)^k (k=1 linear, höher = blendet früher/stärker aus) + Schrift schrumpft
+slider(S_esp, "Fade Strength", 1, 5, state.espFadePow, function(v)
+	state.espFadePow = math.floor(v * 10 + 0.5) / 10
+	return ("%.1fx"):format(state.espFadePow)
+end, "espFadePow")
+local function fadeAlpha(d)
+	local fs = state.espDist * (1 - state.espFade)
+	if d <= fs or state.espDist <= fs then return 0 end
+	local t = math.clamp((d - fs) / (state.espDist - fs), 0, 1)
+	return 1 - (1 - t) ^ state.espFadePow
+end
+local function applyFade(lbl, a, baseSize)
+	lbl.TextTransparency = a
+	lbl.TextStrokeTransparency = 0.3 + 0.7 * a
+	lbl.TextSize = math.max(7, math.floor(baseSize * (1 - 0.45 * a) + 0.5))
+end
 
 -- ================= ITEM-ESP (gedroppte Tools) =================
 -- Spiel-Logik (PromptToolPickup): Tool direkt in workspace + Handle + CanBeDropped = aufhebbar
@@ -774,11 +790,7 @@ task.spawn(function()
 							local hum = c:FindFirstChildOfClass("Humanoid")
 							local hp = hum and math.floor(hum.Health) or 0
 							e.lbl.TextColor3 = teamColor(p)
-							-- Fade: ab (1-espFade)*Reichweite linear ausblenden
-							local fs = state.espDist * (1 - state.espFade)
-							local a = (d > fs and state.espDist > fs) and math.clamp((d - fs) / (state.espDist - fs), 0, 1) or 0
-							e.lbl.TextTransparency = a * 0.95
-							e.lbl.TextStrokeTransparency = 0.3 + 0.7 * a
+							applyFade(e.lbl, fadeAlpha(d), 12)
 							e.lbl.Text = p.DisplayName .. " [" .. (p.Team and p.Team.Name or "?") .. "]\n" .. math.floor(d) .. "m  HP " .. hp
 						else
 							removeEsp(p)
@@ -811,9 +823,7 @@ task.spawn(function()
 						end
 						if o.bb.Adornee ~= h then o.bb.Adornee = h end
 						o.lbl.Text = "▣ " .. t.Name .. "  " .. math.floor(d) .. "m"
-						local fs = state.espDist * (1 - state.espFade)
-						local a = (d > fs and state.espDist > fs) and math.clamp((d - fs) / (state.espDist - fs), 0, 1) or 0
-						o.lbl.TextTransparency = a * 0.95
+						applyFade(o.lbl, fadeAlpha(d), 12)
 					else
 						clearItem(t)
 					end
@@ -2504,7 +2514,7 @@ con(colBtn.MouseLeave, function() colBtn.TextColor3 = T.dim end)
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
 local CFG_FILE = "tsc_hub_config.json"
-local DEFAULTS = { fullbright = false, esp = false, espDist = 1500, espFade = 40, brightness = 2, items = false, perf = 1,
+local DEFAULTS = { fullbright = false, esp = false, espDist = 1500, espFade = 40, espFadePow = 2, brightness = 2, items = false, perf = 1,
 	updInt = 0.2, nofall = false, staff = true, vent = true, ventPred = true, ventLog = true, ventBias = 0,
 	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0, turrets = false }
 local cfgStatus
