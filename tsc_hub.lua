@@ -1186,10 +1186,14 @@ task.spawn(function()
 			for _, p in ipairs(Players:GetPlayers()) do
 				if p ~= lp then
 					local r, c = rootOf(p)
-					if r then
+					-- nur Chars im Workspace: rausgestreamte (Parent=nil) Label weg; beim Wieder-Reinstreamen
+					-- wird dasselbe Part re-parented und ein altes BillboardGui rendert dann nicht mehr -> frisch bauen
+					if r and c:IsDescendantOf(workspace) then
 						local d = (r.Position - myPos).Magnitude
 						if d <= state.espDist then
-							local e = ensureEsp(p)
+							local e = espObjs[p]
+							if e and e.bb.Adornee ~= r then removeEsp(p) end
+							e = ensureEsp(p)
 							if e.bb.Adornee ~= r then e.bb.Adornee = r end
 							local hum = c:FindFirstChildOfClass("Humanoid")
 							local hp = hum and math.floor(hum.Health) or 0
