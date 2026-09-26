@@ -791,7 +791,7 @@ task.spawn(function()
 							local hp = hum and math.floor(hum.Health) or 0
 							e.lbl.TextColor3 = teamColor(p)
 							applyFade(e.lbl, fadeAlpha(d), 12)
-							e.lbl.Text = p.DisplayName .. " [" .. (p.Team and p.Team.Name or "?") .. "]\n" .. math.floor(d) .. "m  HP " .. hp
+							e.lbl.Text = p.DisplayName .. "\n" .. math.floor(d) .. "m  HP " .. hp
 						else
 							removeEsp(p)
 						end
