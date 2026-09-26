@@ -151,7 +151,15 @@ do
 	local function setB(v)
 		v = math.clamp(v, MINB, MAXB)
 		LPROPS.Brightness = v
-		LPROPS.ExposureCompensation = math.clamp((v - 2) / 3, -1, 2.5)
+		-- unter 2: Ambient + Belichtung mit absenken -> bis fast schwarz runterregelbar
+		if v < 2 then
+			local g = v / 2
+			LPROPS.Ambient = Color3.new(g, g, g); LPROPS.OutdoorAmbient = Color3.new(g, g, g)
+			LPROPS.ExposureCompensation = -3 * (1 - g)
+		else
+			LPROPS.Ambient = Color3.new(1, 1, 1); LPROPS.OutdoorAmbient = Color3.new(1, 1, 1)
+			LPROPS.ExposureCompensation = math.clamp((v - 2) / 3, 0, 2.5)
+		end
 		fill.Size = UDim2.new((v - MINB) / (MAXB - MINB), 0, 1, 0)
 		lbl.Text = ("Helligkeit: %.1f"):format(v)
 		if state.fullbright then pcall(applyFB) end
@@ -171,26 +179,19 @@ end
 -- ================= MARKER =================
 local markHL = Instance.new("Highlight")
 markHL.Name = "TSC_MARK_HL"; markHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-markHL.FillColor = Color3.fromRGB(255, 0, 60); markHL.FillTransparency = 0.15
-markHL.OutlineColor = Color3.fromRGB(255, 255, 255); markHL.OutlineTransparency = 0
+markHL.FillColor = Color3.fromRGB(255, 40, 40); markHL.FillTransparency = 0.55
+markHL.OutlineColor = Color3.fromRGB(255, 220, 60); markHL.OutlineTransparency = 0
 markHL.Enabled = false; markHL.Parent = gui
 
 local markBB = Instance.new("BillboardGui")
-markBB.Name = "TSC_MARK_BB"; markBB.AlwaysOnTop = true; markBB.Size = UDim2.fromOffset(260, 58)
+markBB.Name = "TSC_MARK_BB"; markBB.AlwaysOnTop = true; markBB.Size = UDim2.fromOffset(220, 40)
 markBB.StudsOffset = Vector3.new(0, 5, 0); markBB.LightInfluence = 0; markBB.Enabled = false; markBB.Parent = gui
 local markLbl = Instance.new("TextLabel")
-markLbl.Size = UDim2.fromScale(1, 1); markLbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0); markLbl.BackgroundTransparency = 0.35
-markLbl.Font = Enum.Font.GothamBlack; markLbl.TextSize = 20; markLbl.TextColor3 = Color3.fromRGB(255, 255, 0)
-markLbl.TextStrokeTransparency = 0; markLbl.TextStrokeColor3 = Color3.fromRGB(255, 0, 60)
+markLbl.Size = UDim2.fromScale(1, 1); markLbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0); markLbl.BackgroundTransparency = 1
+markLbl.Font = Enum.Font.GothamBlack; markLbl.TextSize = 15; markLbl.TextColor3 = Color3.fromRGB(255, 90, 90)
+markLbl.TextStrokeTransparency = 0.2
 markLbl.Parent = markBB
-Instance.new("UICorner", markLbl).CornerRadius = UDim.new(0, 6)
-local markStroke = Instance.new("UIStroke", markLbl)
-markStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; markStroke.Thickness = 3; markStroke.Color = Color3.fromRGB(255, 0, 60)
 
--- Tracer-Linie: Bildschirm-Mitte unten -> Ziel
-local tracer = Instance.new("Frame")
-tracer.AnchorPoint = Vector2.new(0.5, 0.5); tracer.BorderSizePixel = 0; tracer.BackgroundColor3 = Color3.fromRGB(255, 0, 60)
-tracer.Visible = false; tracer.Parent = gui
 
 -- Randpfeil, wenn Ziel off-screen / hinter mir
 local arrow = Instance.new("TextLabel")
@@ -299,24 +300,19 @@ end)
 con(RunService.RenderStepped, function()
 	local p = markedPlayer()
 	if not p then
-		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false; tracer.Visible = false
+		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false
 		markInfo.Text = state.markName and ("Marker: " .. state.markName .. " (offline)") or "Marker: -"
 		return
 	end
 	local r, c = rootOf(p)
 	if not r then
-		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false; tracer.Visible = false
+		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false
 		markInfo.Text = "Marker: " .. p.Name .. " (kein Char/nicht gestreamt)"
 		return
 	end
 	if markHL.Adornee ~= c then markHL.Adornee = c end
 	if markBB.Adornee ~= r then markBB.Adornee = r end
 	markHL.Enabled = true; markBB.Enabled = true
-	-- Pulsieren (rot <-> magenta, Fill 0.05..0.4)
-	local t = (math.sin(os.clock() * 6) + 1) / 2
-	markHL.FillTransparency = 0.05 + 0.35 * t
-	markHL.FillColor = Color3.fromRGB(255, 0, math.floor(60 + 160 * t))
-	markStroke.Color = markHL.FillColor
 	local myRoot = rootOf(lp)
 	local d = myRoot and math.floor((r.Position - myRoot.Position).Magnitude) or 0
 	markLbl.Text = "◆ " .. p.DisplayName .. " ◆\n" .. d .. "m"
@@ -326,14 +322,6 @@ con(RunService.RenderStepped, function()
 	local sp, onScreen = cam:WorldToViewportPoint(r.Position)
 	if onScreen and sp.Z > 0 then
 		arrow.Visible = false
-		local a = Vector2.new(vp.X / 2, vp.Y - 4)
-		local b = Vector2.new(sp.X, sp.Y)
-		local v = b - a
-		tracer.Size = UDim2.fromOffset(v.Magnitude, 2)
-		tracer.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
-		tracer.Rotation = math.deg(math.atan2(v.Y, v.X))
-		tracer.BackgroundColor3 = markHL.FillColor
-		tracer.Visible = true
 	else
 		local center = vp / 2
 		local dir = Vector2.new(sp.X, sp.Y) - center
@@ -347,9 +335,7 @@ con(RunService.RenderStepped, function()
 		arrow.Position = UDim2.fromOffset(pos.X, pos.Y)
 		arrow.Text = "➤ " .. p.DisplayName .. " " .. d .. "m"
 		arrow.Rotation = 0
-		arrow.TextSize = 18 + math.floor(4 * t)
 		arrow.Visible = true
-		tracer.Visible = false
 	end
 end)
 
