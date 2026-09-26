@@ -35,7 +35,7 @@ local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDow
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
-	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor" }
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -199,7 +199,11 @@ local function nextOrder(S) S.n = S.n + 1 return S.n end
 
 -- Keybinds: Klick auf Box -> nächste Taste belegen (Escape = abbrechen)
 local listening, keyBoxes = nil, {}
-local function keyName(k) return k and (k.Name:lower():gsub("mousebutton", "mouse")) or "none" end
+local KEY_ALIAS = { F13 = "mouse4", F14 = "mouse5" } -- tools/MouseBridge: Maus 4/5 -> F13/F14 (Roblox kennt keine Seitentasten)
+local function keyName(k)
+	if not k then return "none" end
+	return KEY_ALIAS[k.Name] or (k.Name:lower():gsub("mousebutton", "mouse"))
+end
 local function keybox(parent, id)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.fromOffset(78, 18); b.AnchorPoint = Vector2.new(1, 0); b.Position = UDim2.new(1, 0, 0, 0)
@@ -584,6 +588,26 @@ state.aimPred = sv("aimPred", false); state.aimPredX = sv("aimPredX", 5); state.
 state.aimSmooth = sv("aimSmooth", true); state.aimSmX = sv("aimSmX", 7.5); state.aimSmY = sv("aimSmY", 7.5)
 state.fov = sv("fov", true); state.fovGlow = sv("fovGlow", false); state.fovFill = sv("fovFill", false)
 state.fovSize = sv("fovSize", 126); state.fovStyle = sv("fovStyle", 1); state.fovColor = sv("fovColor", 1)
+state.fovGunOnly = sv("fovGunOnly", false)
+
+-- Schusswaffe ausgerüstet? GunData.MagSize > 0 (AK-47: 30, Fäuste: 0). Ergebnis pro Tool gecacht.
+local gunCache = setmetatable({}, { __mode = "k" })
+local function gunEquipped()
+	local c = lp.Character
+	local t = c and c:FindFirstChildOfClass("Tool")
+	if not t then return false end
+	local v = gunCache[t]
+	if v == nil then
+		v = false
+		local gd = t:FindFirstChild("GunData")
+		if gd and gd:IsA("ModuleScript") then
+			local ok, d = pcall(require, gd)
+			v = ok and type(d) == "table" and (tonumber(d.MagSize) or 0) > 0
+		end
+		gunCache[t] = v
+	end
+	return v
+end
 
 local FOV_COLORS = { Color3.fromRGB(0, 255, 255), Color3.fromRGB(210, 80, 170), Color3.fromRGB(255, 255, 255),
 	Color3.fromRGB(255, 70, 70), Color3.fromRGB(90, 255, 120), Color3.fromRGB(255, 210, 60) }
@@ -610,6 +634,7 @@ toggle(S_aimT, "Rage Method", "aimRage", function() end)
 dropdown(S_aimT, "Type", { "Camera Teleport", "Mouse Flick" }, state.aimRageType, function(i) state.aimRageType = i end, "aimRageType")
 local aimStatus = info(S_aimT, "Target: -")
 info(S_aimT, "Hold the aim key. Rage = instant snap, ignores FOV + visible check.")
+info(S_aimT, "Mouse 3 works natively. Mouse 4/5: run tools/MouseBridge.exe (maps them to F13/F14 while Roblox is focused), then click the key box and press the side button.")
 
 toggle(S_pred, "Enabled", "aimPred", function() end)
 slider(S_pred, "Prediction X", 0, 20, state.aimPredX, function(v)
@@ -647,6 +672,7 @@ do -- Farbfeld rechts in der Zeile: Klick = nächste Farbe
 end
 toggle(S_fov, "Glow", "fovGlow", function() end)
 toggle(S_fov, "Filled", "fovFill", function() end)
+toggle(S_fov, "Only With Gun", "fovGunOnly", function() end)
 slider(S_fov, "Size", 10, 600, state.fovSize, function(v) state.fovSize = math.floor(v); return tostring(state.fovSize) end, "fovSize")
 dropdown(S_fov, "Style", { "Smooth", "Static", "Center" }, state.fovStyle, function(i) state.fovStyle = i end, "fovStyle")
 info(S_fov, "Smooth = follows the mouse softly, Static = sits on the mouse, Center = screen center.")
@@ -702,7 +728,7 @@ RunService:BindToRenderStep("TSC_AIM", Enum.RenderPriority.Camera.Value + 1, fun
 	local want = (state.fovStyle == 3) and (cam.ViewportSize / 2) or mouse
 	if state.fovStyle == 1 and fovPos then fovPos = fovPos:Lerp(want, math.clamp(dt * 18, 0, 1)) else fovPos = want end
 	local r = state.fovSize
-	if state.fov then
+	if state.fov and (not state.fovGunOnly or gunEquipped()) then
 		local col = FOV_COLORS[state.fovColor] or FOV_COLORS[1]
 		fovRing.Position = UDim2.fromOffset(fovPos.X, fovPos.Y); fovRing.Size = UDim2.fromOffset(r * 2, r * 2)
 		fovStroke.Color = col; fovGlowS.Color = col; fovGlowS.Enabled = state.fovGlow
@@ -2883,7 +2909,7 @@ local DEFAULTS = { fullbright = false, esp = false, espDist = 1500, espFade = 40
 	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0, turrets = false, nofog = false,
 	aim = false, aimTeam = true, aimVis = true, aimHealth = true, aimSticky = true, aimDist = 600, aimSens = 2, aimPart = 1, aimType = 1,
 	aimRage = false, aimRageType = 1, aimPred = false, aimPredX = 5, aimPredY = 5, aimSmooth = true, aimSmX = 7.5, aimSmY = 7.5,
-	fov = true, fovGlow = false, fovFill = false, fovSize = 126, fovStyle = 1 }
+	fov = true, fovGlow = false, fovFill = false, fovSize = 126, fovStyle = 1, fovGunOnly = false }
 local cfgStatus
 local function saveCfg()
 	local data = { keys = {} }
