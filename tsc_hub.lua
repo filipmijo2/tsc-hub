@@ -16,7 +16,17 @@ local cam = workspace.CurrentCamera
 
 local function con(sig, fn) local c = sig:Connect(fn) table.insert(H.conns, c) return c end
 
-local state = { fullbright = false, esp = false, espDist = 1500, espFade = 0.4, markId = nil, markName = nil }
+-- Persistenz: Einstellungen in tsc_hub_settings.json (überlebt Re-Execute/Rejoin)
+local HttpService = game:GetService("HttpService")
+local SAVE_FILE = "tsc_hub_settings.json"
+local saved = {}
+pcall(function() if isfile(SAVE_FILE) then saved = HttpService:JSONDecode(readfile(SAVE_FILE)) end end)
+if type(saved) ~= "table" then saved = {} end
+local function sv(k, def) if saved[k] ~= nil then return saved[k] end return def end
+local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName" }
+
+local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
+	espFade = sv("espFade", 0.4), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil) }
 H.state = state
 
 -- ================= GUI =================
@@ -28,7 +38,8 @@ gui.Parent = CoreGui
 local espFolder = Instance.new("Folder"); espFolder.Name = "TSC_ESP"; espFolder.Parent = gui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(260, 648); main.Position = UDim2.fromOffset(40, 200)
+main.Size = UDim2.fromOffset(260, 648); main.Position = UDim2.fromOffset(sv("guiX", 40), sv("guiY", 200))
+main.Visible = sv("guiVisible", true)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 28); main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
@@ -66,6 +77,7 @@ local function mkToggle(y, label, key, onChange)
 		b.BackgroundColor3 = state[key] and Color3.fromRGB(40, 150, 70) or Color3.fromRGB(55, 58, 68)
 	end
 	paint()
+	if state[key] then task.spawn(onChange, true) end -- gespeicherten Zustand anwenden
 	con(b.MouseButton1Click, function() state[key] = not state[key]; paint(); task.spawn(onChange, state[key]) end)
 	return b
 end
@@ -166,7 +178,8 @@ local function mkSlider(y, minV, maxV, init, color, onSet)
 end
 
 -- Helligkeit (Fullbright): 0..10 -> Brightness + ExposureCompensation
-mkSlider(104, 0, 10, 2, Color3.fromRGB(255, 200, 60), function(v)
+mkSlider(104, 0, 10, state.bright, Color3.fromRGB(255, 200, 60), function(v)
+	state.bright = v
 	LPROPS.Brightness = v
 	-- unter 2: Ambient + Belichtung mit absenken -> bis fast schwarz runterregelbar
 	if v < 2 then
@@ -193,7 +206,7 @@ end)
 
 -- ================= ITEM-ESP (gedroppte Tools) =================
 -- Spiel-Logik (PromptToolPickup): Tool direkt in workspace + Handle + CanBeDropped = aufhebbar
-state.items = false
+state.items = sv("items", false)
 local itemObjs = {} -- [tool] = {bb=, lbl=}
 local function isDropped(t) return t:IsA("Tool") and t.Parent == workspace and t:FindFirstChild("Handle") ~= nil end
 local function clearItem(t) local o = itemObjs[t] if o then pcall(function() o.bb:Destroy() end) itemObjs[t] = nil end end
@@ -202,7 +215,7 @@ con(workspace.ChildRemoved, function(t) clearItem(t) end)
 
 -- ================= PERFORMANCE =================
 -- Stufe 0 aus | 1 Schatten/Post-FX/Terrain-Deko aus | 2 + Partikel/Trails/Beams/Decals/Texturen weg | 3 + alles SmoothPlastic, Qualität min
-state.perf = 0; state.updInt = 0.2
+state.perf = sv("perf", 0); state.updInt = sv("updInt", 0.2)
 local perfCur, perfOrig = 0, setmetatable({}, { __mode = "k" })
 local function setp(o, k, v)
 	local t = perfOrig[o]
@@ -241,7 +254,7 @@ local function perfRestore(chunked)
 	end
 	pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end)
 end
-mkSlider(274, 0, 3, 0, Color3.fromRGB(90, 220, 140), function(v)
+mkSlider(274, 0, 3, state.perf, Color3.fromRGB(90, 220, 140), function(v)
 	state.perf = math.floor(v + 0.5)
 	return "Performance-Stufe: " .. state.perf .. ({ " (aus)", " (Schatten/FX)", " (+Partikel/Decals)", " (+Materialien)" })[state.perf + 1]
 end)
@@ -276,7 +289,7 @@ end)
 -- ================= NO FALL DAMAGE =================
 -- ClientFallDamage meldet FallImpact:FireServer(-vel.Y) beim Landen, aber nur wenn > 80.
 -- Hook-frei: in Bodennähe jeden Frame auf 60 kappen (Landung max ~65) -> nichts wird gemeldet.
-state.nofall = false
+state.nofall = sv("nofall", false)
 local FALL_CAP = 60
 local fallParams = RaycastParams.new(); fallParams.FilterType = Enum.RaycastFilterType.Exclude
 mkToggle(342, "No Fall Damage", "nofall", function() end)
@@ -530,7 +543,7 @@ Instance.new("UICorner", staffPanel).CornerRadius = UDim.new(0, 6)
 local pad = Instance.new("UIPadding", staffPanel)
 pad.PaddingLeft = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
 
-state.staff = true
+state.staff = sv("staff", true)
 mkToggle(206, "Staff-Radar", "staff", function() end)
 
 local staffObjs = {} -- [player] = {bb=, lbl=, box=}
@@ -622,6 +635,21 @@ end)
 -- Toggle GUI
 con(UIS.InputBegan, function(i, gp)
 	if not gp and i.KeyCode == Enum.KeyCode.RightShift then main.Visible = not main.Visible end
+end)
+
+-- Speichern (nur bei Änderung, max 1x/s)
+task.spawn(function()
+	local last = ""
+	while H.alive do
+		local t = {}
+		for _, k in ipairs(SAVE_KEYS) do t[k] = state[k] end
+		t.guiX = main.Position.X.Offset; t.guiY = main.Position.Y.Offset; t.guiVisible = main.Visible
+		local ok, js = pcall(function() return HttpService:JSONEncode(t) end)
+		if ok and js ~= last then
+			if pcall(writefile, SAVE_FILE, js) then last = js end
+		end
+		task.wait(1)
+	end
 end)
 
 function H.kill()
