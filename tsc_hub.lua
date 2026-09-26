@@ -27,7 +27,7 @@ gui.Parent = CoreGui
 local espFolder = Instance.new("Folder"); espFolder.Name = "TSC_ESP"; espFolder.Parent = gui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(260, 480); main.Position = UDim2.fromOffset(40, 200)
+main.Size = UDim2.fromOffset(260, 514); main.Position = UDim2.fromOffset(40, 200)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 28); main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
@@ -214,26 +214,26 @@ arrow.Font = Enum.Font.GothamBlack; arrow.TextSize = 16; arrow.TextColor3 = Colo
 arrow.TextStrokeTransparency = 0; arrow.Visible = false; arrow.Parent = gui
 
 local markInfo = Instance.new("TextLabel")
-markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 208)
+markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 242)
 markInfo.BackgroundTransparency = 1; markInfo.Font = Enum.Font.Gotham; markInfo.TextSize = 13
 markInfo.TextColor3 = Color3.fromRGB(255, 120, 120); markInfo.TextXAlignment = Enum.TextXAlignment.Left
 markInfo.Text = "Marker: -"; markInfo.Parent = main
 
 local clearBtn = Instance.new("TextButton")
-clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 208)
+clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 242)
 clearBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40); clearBtn.BorderSizePixel = 0; clearBtn.Font = Enum.Font.Gotham
 clearBtn.TextSize = 12; clearBtn.TextColor3 = Color3.new(1, 1, 1); clearBtn.Text = "weg"; clearBtn.Parent = main
 Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 5)
 
 local search = Instance.new("TextBox")
-search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 234)
+search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 268)
 search.BackgroundColor3 = Color3.fromRGB(40, 42, 50); search.BorderSizePixel = 0; search.Font = Enum.Font.Gotham
 search.TextSize = 13; search.TextColor3 = Color3.new(1, 1, 1); search.PlaceholderText = "Spieler suchen..."
 search.Text = ""; search.ClearTextOnFocus = false; search.Parent = main
 Instance.new("UICorner", search).CornerRadius = UDim.new(0, 5)
 
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, -16, 1, -272); list.Position = UDim2.fromOffset(8, 264)
+list.Size = UDim2.new(1, -16, 1, -306); list.Position = UDim2.fromOffset(8, 298)
 list.BackgroundColor3 = Color3.fromRGB(28, 30, 36); list.BorderSizePixel = 0; list.ScrollBarThickness = 5
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y; list.CanvasSize = UDim2.new(); list.Parent = main
 local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.Name
@@ -355,6 +355,129 @@ con(RunService.RenderStepped, function()
 		arrow.Text = "➤ " .. p.DisplayName .. " " .. d .. "m"
 		arrow.Rotation = 0
 		arrow.Visible = true
+	end
+end)
+
+-- ================= STAFF-RADAR =================
+-- Gruppe 11577231: Rang >= 90 = Staff (External Command, Intern, Dept-Admin, Contractor, Devs);
+-- plrUniqueTag_txt-Attribut = Staff-Tag (QA etc.). Panel oben mittig, immer sichtbar (auch wenn Hub zu).
+local GROUP_ID, STAFF_MIN = 11577231, 90
+local rankCache = {} -- [userId] = {rank=, role=}
+local function fetchRank(p)
+	if rankCache[p.UserId] then return end
+	rankCache[p.UserId] = { rank = -1, role = "?" }
+	task.spawn(function()
+		local ok, r = pcall(function() return p:GetRankInGroup(GROUP_ID) end)
+		local ok2, role = pcall(function() return p:GetRoleInGroup(GROUP_ID) end)
+		rankCache[p.UserId] = { rank = ok and r or -1, role = ok2 and role or "?" }
+	end)
+end
+local function staffInfo(p)
+	local rc = rankCache[p.UserId]
+	local tag = p:GetAttribute("plrUniqueTag_txt")
+	if rc and rc.rank >= STAFF_MIN then return rc.role .. (tag and (" | " .. tag) or ""), true end
+	if tag and tag ~= "" then return tostring(tag), false end
+	return nil
+end
+for _, p in ipairs(Players:GetPlayers()) do fetchRank(p) end
+
+local staffPanel = Instance.new("TextLabel")
+staffPanel.AnchorPoint = Vector2.new(0.5, 0); staffPanel.Position = UDim2.new(0.5, 0, 0, 44)
+staffPanel.Size = UDim2.fromOffset(420, 20); staffPanel.AutomaticSize = Enum.AutomaticSize.Y
+staffPanel.BackgroundColor3 = Color3.fromRGB(15, 15, 20); staffPanel.BackgroundTransparency = 0.35
+staffPanel.Font = Enum.Font.GothamBold; staffPanel.TextSize = 13; staffPanel.RichText = true
+staffPanel.TextColor3 = Color3.new(1, 1, 1); staffPanel.TextXAlignment = Enum.TextXAlignment.Left
+staffPanel.TextYAlignment = Enum.TextYAlignment.Top; staffPanel.Visible = false; staffPanel.Parent = gui
+Instance.new("UICorner", staffPanel).CornerRadius = UDim.new(0, 6)
+local pad = Instance.new("UIPadding", staffPanel)
+pad.PaddingLeft = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+
+state.staff = true
+mkToggle(206, "Staff-Radar", "staff", function() end)
+
+local staffObjs = {} -- [player] = {bb=, lbl=, box=}
+local function clearStaffObj(p)
+	local o = staffObjs[p]
+	if o then pcall(function() o.bb:Destroy() end) pcall(function() o.box:Destroy() end) staffObjs[p] = nil end
+end
+con(Players.PlayerAdded, function(p) fetchRank(p) end)
+con(Players.PlayerRemoving, function(p) clearStaffObj(p) end)
+
+local function isInvisible(c)
+	local any, vis = false, false
+	for _, d in ipairs(c:GetDescendants()) do
+		if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+			any = true
+			if d.Transparency < 0.9 then vis = true break end
+		end
+	end
+	return any and not vis
+end
+
+local function esc(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+
+task.spawn(function()
+	while H.alive do
+		local lines, n = {}, 0
+		local myRoot = rootOf(lp)
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= lp then
+				local info, isStaff = staffInfo(p)
+				if info and state.staff then
+					n = n + 1
+					local c = p.Character
+					local r = c and c:FindFirstChild("HumanoidRootPart")
+					local status, col
+					if not c then
+						status, col = "KEIN CHAR (Spectate/Menü?)", "#ff4040"
+					elseif not c.Parent then
+						status, col = "nicht geladen (anderer Bereich)", "#aaaaaa"
+					elseif isInvisible(c) then
+						status, col = "UNSICHTBAR", "#ff4040"
+					else
+						status, col = "sichtbar", "#80ff80"
+					end
+					local dist = (r and myRoot) and math.floor((r.Position - myRoot.Position).Magnitude) or nil
+					if dist and c and c.Parent and dist < 60 and status ~= "sichtbar" then col = "#ff00ff" end
+					if p:GetAttribute("InMenu") then status = status .. " [InMenu]" end
+					lines[#lines + 1] = ('<font color="%s">%s %s</font>  <font color="#9ab">%s</font>  %s%s'):format(
+						isStaff and "#ffcc40" or "#8fd0ff", isStaff and "★" or "•", esc(p.Name), esc(info),
+						('<font color="%s">%s</font>'):format(col, status), dist and ("  " .. dist .. "m") or "")
+					-- Welt-Marker (auch für unsichtbare): Box am Root + Label, ignoriert ESP-Reichweite
+					if r and c.Parent then
+						local o = staffObjs[p]
+						if not o then
+							local bb = Instance.new("BillboardGui")
+							bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(220, 30); bb.StudsOffset = Vector3.new(0, 3.6, 0)
+							bb.LightInfluence = 0; bb.Parent = gui
+							local l = Instance.new("TextLabel")
+							l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+							l.TextSize = 13; l.TextStrokeTransparency = 0.2; l.Parent = bb
+							local box = Instance.new("BoxHandleAdornment")
+							box.AlwaysOnTop = true; box.ZIndex = 5; box.Size = Vector3.new(2.2, 5, 1.4)
+							box.Transparency = 0.6; box.Parent = gui
+							o = { bb = bb, lbl = l, box = box }
+							staffObjs[p] = o
+						end
+						o.bb.Adornee = r; o.box.Adornee = r
+						o.box.Color3 = isStaff and Color3.fromRGB(255, 200, 40) or Color3.fromRGB(120, 200, 255)
+						o.lbl.TextColor3 = o.box.Color3
+						o.lbl.Text = (isStaff and "★ STAFF " or "• ") .. p.Name .. (status ~= "sichtbar" and (" [" .. status .. "]") or "")
+					else
+						clearStaffObj(p)
+					end
+				else
+					clearStaffObj(p)
+				end
+			end
+		end
+		if state.staff and n > 0 then
+			staffPanel.Text = ('<font color="#ffcc40">STAFF IM SERVER: %d</font>\n'):format(n) .. table.concat(lines, "\n")
+			staffPanel.Visible = true
+		else
+			staffPanel.Visible = false
+		end
+		task.wait(0.5)
 	end
 end)
 
