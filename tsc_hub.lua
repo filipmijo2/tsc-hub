@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -3727,6 +3727,56 @@ state.chatOverlay = sv("chatOverlay", false)
 				chatInfo.Text = ""
 			end
 			task.wait(0.5)
+		end
+	end)
+end)()
+
+-- ================= DISGUISE DETECTOR =================
+-- DISGUISE-CARD -> Server legt Character.DisguisedAsTeam (ObjectValue -> Team, +FakeNameIndex) an; plrTag zeigt dann
+-- falsches Team/Rang. Leaderboard/Player.Team bleibt echt -> Vergleich entlarvt. Rein lesend.
+state.disgDetect = sv("disgDetect", true)
+;(function()
+	local S_disg = section(visL, "Disguise Detector")
+	toggle(S_disg, "Reveal Disguises", "disgDetect", function() end)
+	local disgInfo = info(S_disg, "")
+	local tags = {} -- [player] = billboard
+	local function clearTag(p) if tags[p] then pcall(function() tags[p]:Destroy() end) tags[p] = nil end end
+	con(Players.PlayerRemoving, clearTag)
+	task.spawn(function()
+		while H.alive do
+			local lines = {}
+			for _, p in ipairs(Players:GetPlayers()) do
+				local c = p.Character
+				local d = state.disgDetect and p ~= lp and c and c:FindFirstChild("DisguisedAsTeam")
+				local head = c and (c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart"))
+				if d and head and c:IsDescendantOf(workspace) then
+					local real = p.Team and p.Team.Name or "?"
+					local fake = d.Value and d.Value.Name or "?"
+					local bb = tags[p]
+					if not bb or bb.Adornee ~= head then
+						clearTag(p)
+						bb = Instance.new("BillboardGui")
+						bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(260, 34); bb.StudsOffset = Vector3.new(0, 5.5, 0)
+						bb.LightInfluence = 0; bb.Adornee = head; bb.Parent = gui
+						local l = Instance.new("TextLabel")
+						l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBlack; l.TextSize = 13
+						l.TextColor3 = Color3.fromRGB(255, 70, 70); l.TextStrokeTransparency = 0.2; l.Parent = bb
+						tags[p] = bb
+					end
+					bb.TextLabel.Text = ("DISGUISED\nreal: %s  |  shown: %s"):format(real, fake)
+					lines[#lines + 1] = ('<font color="#ff4646">%s</font>: real <b>%s</b> → shown %s'):format(p.Name, real, fake)
+				else
+					clearTag(p)
+					if state.disgDetect and p ~= lp and c and not c:IsDescendantOf(workspace) then
+						-- nicht geladen: Child ggf. noch lesbar
+						local d2 = c:FindFirstChild("DisguisedAsTeam")
+						if d2 then lines[#lines + 1] = ('<font color="#ff9696">%s</font>: real %s → shown %s (far)'):format(
+							p.Name, p.Team and p.Team.Name or "?", d2.Value and d2.Value.Name or "?") end
+					end
+				end
+			end
+			disgInfo.Text = state.disgDetect and (#lines > 0 and table.concat(lines, "\n") or "No disguised players.") or ""
+			task.wait(1)
 		end
 	end)
 end)()
