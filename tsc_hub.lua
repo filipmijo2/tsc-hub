@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -1217,6 +1217,53 @@ con(RunService.Heartbeat, function(dt)
 		r.AssemblyLinearVelocity = Vector3.new(v.X, -FALL_CAP, v.Z)
 	end
 end)
+
+-- ================= WALK THROUGH DOORS =================
+-- InteractEvent(door) prüft Clearance serverseitig -> Tür öffnen ohne Karte geht nicht. Aber: eigener Char ist
+-- client-owned (Physik lokal) -> Türflügel lokal CanCollide=false = durchlaufen; für andere bleibt die Tür zu.
+-- Türen = CollectionService-Tag "DoorInteractable"; Frame/Button behalten Kollision. Flügel lokal halb transparent.
+state.doorphase = sv("doorphase", false)
+do
+	local CS = game:GetService("CollectionService")
+	local KEEP = { Frame = true, Button = true, ExternalSoundPlayer = true }
+	local touched = {} -- [part] = origCanCollide
+	local doorInfo
+	local function phaseDoor(door)
+		if not state.doorphase then return end
+		for _, d in ipairs(door:GetDescendants()) do
+			if d:IsA("BasePart") and not KEEP[d.Name] and not (d.Parent and KEEP[d.Parent.Name]) and touched[d] == nil then
+				touched[d] = d.CanCollide
+				d.CanCollide = false
+				d.LocalTransparencyModifier = 0.5
+			end
+		end
+	end
+	local function restoreAll()
+		for d, orig in pairs(touched) do
+			if d.Parent then d.CanCollide = orig; d.LocalTransparencyModifier = 0 end
+		end
+		touched = {}
+	end
+	local function applyAll()
+		for _, door in ipairs(CS:GetTagged("DoorInteractable")) do pcall(phaseDoor, door) end
+	end
+	toggle(S_move, "Walk Through Doors", "doorphase", function(on) if on then applyAll() else restoreAll() end end)
+	doorInfo = info(S_move, "")
+	con(CS:GetInstanceAddedSignal("DoorInteractable"), function(door) task.defer(function() pcall(phaseDoor, door) end) end)
+	task.spawn(function()
+		while H.alive do
+			if state.doorphase then
+				applyAll() -- neu gestreamte Türteile nachziehen
+				local n = 0 for d in pairs(touched) do if d.Parent then n = n + 1 else touched[d] = nil end end
+				doorInfo.Text = '<font color="#78ff8c">' .. n .. " door parts passable (local)</font>"
+			else
+				doorInfo.Text = ""
+			end
+			task.wait(2)
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() pcall(restoreAll) end })
+end
 
 -- ================= INFINITE STAMINA =================
 -- Stamina lebt rein clientseitig im Actor PlayerScripts.FrameworkActor (FrameworkClient.Stamina-Tabelle mit
