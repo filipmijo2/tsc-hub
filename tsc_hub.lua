@@ -35,7 +35,9 @@ local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDow
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
-	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel" }
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
+	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -727,6 +729,7 @@ info(S_fov, "Smooth = follows the mouse softly, Static = sits on the mouse, Cent
 
 local aimParams = RaycastParams.new(); aimParams.FilterType = Enum.RaycastFilterType.Exclude
 local aimTarget, fovPos = nil, nil
+H.aimInfo = function() return aimTarget, fovPos end
 local hasRel = typeof(mousemoverel) == "function"
 
 local function aimPartOf(c, origin)
@@ -899,6 +902,214 @@ local function applyFade(lbl, a, baseSize)
 	lbl.TextTransparency = a
 	lbl.TextStrokeTransparency = 0.3 + 0.7 * a
 	lbl.TextSize = math.max(7, math.floor(baseSize * (1 - 0.45 * a) + 0.5))
+end
+
+-- ================= ESP (Boxen / Health / Tracer) =================
+-- Eigene ScreenGui (IgnoreGuiInset -> Koordinaten = Viewport), gezeichnet nach dem Kamera-Update (Camera+2),
+-- damit Boxen nicht hinterherwackeln. Nur Chars im Workspace (rausgestreamte haben keine aktuelle Position).
+do
+state.espBox = sv("espBox", true); state.espBoxStyle = sv("espBoxStyle", 1); state.espBoxFill = sv("espBoxFill", false)
+state.espHealth = sv("espHealth", true); state.espName = sv("espName", true); state.espDistTxt = sv("espDistTxt", true)
+state.espTextSize = sv("espTextSize2", 15); state.espTracer = sv("espTracer", false); state.espTracerFov = sv("espTracerFov", true)
+state.espTracerFrom = sv("espTracerFrom", 1); state.espTeamCol = sv("espTeamCol", true); state.espTargetCol = sv("espTargetCol", true)
+state.espHideTeam = sv("espHideTeam", false)
+
+local ESP_FONT, ESP_FONT_BOLD = Enum.Font.GothamBold, Enum.Font.GothamBlack
+pcall(function() ESP_FONT = Enum.Font.BuilderSansBold end)
+pcall(function() ESP_FONT_BOLD = Enum.Font.BuilderSansExtraBold end)
+local TARGET_COL = Color3.fromRGB(255, 60, 110)
+local BASE_COL = Color3.fromRGB(235, 235, 240)
+local BLACK = Color3.new(0, 0, 0)
+
+local S_espStyle = section(visL, "ESP Style")
+toggle(S_espStyle, "Boxes", "espBox", function() end)
+dropdown(S_espStyle, "Box Style", { "Full", "Corners" }, state.espBoxStyle, function(i) state.espBoxStyle = i end, "espBoxStyle")
+toggle(S_espStyle, "Box Fill", "espBoxFill", function() end)
+toggle(S_espStyle, "Health Bar", "espHealth", function() end)
+toggle(S_espStyle, "Names", "espName", function() end)
+toggle(S_espStyle, "Distance", "espDistTxt", function() end)
+slider(S_espStyle, "Text Size", 9, 18, state.espTextSize, function(v)
+	state.espTextSize = math.floor(v + 0.5); state.espTextSize2 = state.espTextSize; return tostring(state.espTextSize) end, "espTextSize")
+toggle(S_espStyle, "Tracers", "espTracer", function() end)
+toggle(S_espStyle, "Tracers Only In FOV", "espTracerFov", function() end)
+dropdown(S_espStyle, "Tracer Origin", { "Bottom", "Mouse", "FOV Center", "Top" }, state.espTracerFrom, function(i) state.espTracerFrom = i end, "espTracerFrom")
+toggle(S_espStyle, "Team Colors", "espTeamCol", function() end)
+toggle(S_espStyle, "Highlight Aim Target", "espTargetCol", function() end)
+toggle(S_espStyle, "Hide Teammates", "espHideTeam", function() end)
+
+local espGui = Instance.new("ScreenGui")
+espGui.Name = "TSC_ESP2"; espGui.ResetOnSpawn = false; espGui.IgnoreGuiInset = true; espGui.DisplayOrder = 998
+espGui.Parent = CoreGui
+table.insert(H.conns, { Disconnect = function() espGui:Destroy() end })
+
+local function line(parent, th)
+	local f = Instance.new("Frame"); f.BorderSizePixel = 0; f.AnchorPoint = Vector2.new(0.5, 0.5); f.Parent = parent
+	local s = Instance.new("UIStroke", f); s.Color = BLACK; s.Thickness = th or 1; s.Transparency = 0.35
+	return f, s
+end
+local function label(parent)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1; l.Font = ESP_FONT; l.TextStrokeTransparency = 0.15; l.TextStrokeColor3 = BLACK
+	l.Size = UDim2.fromOffset(200, 16); l.AnchorPoint = Vector2.new(0.5, 0); l.Parent = parent
+	return l
+end
+
+local function build(p)
+	local root = Instance.new("Frame")
+	root.Name = "P_" .. p.UserId; root.BackgroundTransparency = 1; root.Size = UDim2.fromScale(1, 1); root.Parent = espGui
+	local o = { root = root }
+	-- volle Box: Füllung + farbige Kontur + schwarze Außenkontur
+	local box = Instance.new("Frame"); box.BorderSizePixel = 0; box.Parent = root
+	local bIn = Instance.new("UIStroke", box); bIn.Thickness = 1; bIn.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	local outl = Instance.new("Frame"); outl.BackgroundTransparency = 1; outl.Parent = root
+	local bOut = Instance.new("UIStroke", outl); bOut.Thickness = 3; bOut.Color = BLACK; bOut.Transparency = 0.4
+	o.box, o.bIn, o.outl, o.bOut = box, bIn, outl, bOut
+	-- Ecken: 8 kurze Linien
+	o.corners = {}
+	for i = 1, 8 do o.corners[i] = { line(root, 1) } end
+	-- Health Bar
+	local hbg = Instance.new("Frame"); hbg.BorderSizePixel = 0; hbg.BackgroundColor3 = BLACK; hbg.BackgroundTransparency = 0.35; hbg.Parent = root
+	local hfill = Instance.new("Frame"); hfill.BorderSizePixel = 0; hfill.AnchorPoint = Vector2.new(0, 1); hfill.Parent = hbg
+	o.hbg, o.hfill = hbg, hfill
+	o.name = label(root); o.info = label(root)
+	o.name.Font = ESP_FONT_BOLD
+	o.tracer = { line(root, 1) }
+	return o
+end
+
+local objs = {}
+local function kill(p) local o = objs[p]; if o then pcall(function() o.root:Destroy() end); objs[p] = nil end end
+removeEsp = function(p) kill(p) end -- PlayerRemoving/Aus-Schalten nutzen weiterhin removeEsp
+con(Players.PlayerRemoving, kill)
+
+local function setLine(f, a, b, col, tr)
+	local d = b - a
+	f.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+	f.Size = UDim2.fromOffset(math.max(d.Magnitude, 1), 1.5)
+	f.Rotation = math.deg(math.atan2(d.Y, d.X))
+	f.BackgroundColor3 = col; f.BackgroundTransparency = tr
+	f.Visible = true
+end
+
+local function hpColor(fr)
+	if fr > 0.5 then return Color3.fromRGB(255, 220, 60):Lerp(Color3.fromRGB(80, 235, 110), (fr - 0.5) * 2) end
+	return Color3.fromRGB(235, 60, 60):Lerp(Color3.fromRGB(255, 220, 60), fr * 2)
+end
+
+RunService:BindToRenderStep("TSC_ESP", Enum.RenderPriority.Camera.Value + 2, function()
+	if not state.esp then
+		for p in pairs(objs) do kill(p) end
+		return
+	end
+	local camPos = cam.CFrame.Position
+	local vp = cam.ViewportSize
+	local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+	local myPos = myRoot and myRoot.Position or camPos
+	local aimT, fovC = nil, nil
+	if H.aimInfo then aimT, fovC = H.aimInfo() end
+	local mouse = UIS:GetMouseLocation()
+	local seen = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p == lp then continue end
+		local c = p.Character
+		local r = c and c:FindFirstChild("HumanoidRootPart")
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if not (r and hum and c:IsDescendantOf(workspace)) then continue end
+		if state.espHideTeam and p.Team ~= nil and p.Team == lp.Team then continue end
+		local dist = (r.Position - myPos).Magnitude
+		if dist > state.espDist then continue end
+		-- Box aus Kopf-oben / Füße-unten projizieren (stabil bei Rotation)
+		local up = Vector3.new(0, 1, 0)
+		local top, onT = cam:WorldToViewportPoint(r.Position + up * 2.9)
+		local bot, onB = cam:WorldToViewportPoint(r.Position - up * 3.2)
+		if top.Z <= 0 or bot.Z <= 0 then continue end
+		local h = math.abs(bot.Y - top.Y)
+		local w = h * 0.58
+		local cx = (top.X + bot.X) / 2
+		local x0, y0 = cx - w / 2, math.min(top.Y, bot.Y)
+		if x0 > vp.X or x0 + w < 0 or y0 > vp.Y or y0 + h < 0 then continue end
+
+		seen[p] = true
+		local o = objs[p] or build(p); objs[p] = o
+		o.root.Visible = true
+		local a = fadeAlpha(dist)
+		local isT = state.espTargetCol and aimT == p
+		local col = isT and TARGET_COL or (state.espTeamCol and p.Team and p.TeamColor.Color or BASE_COL)
+
+		-- Box
+		local full = state.espBox and state.espBoxStyle == 1
+		o.box.Visible = full; o.outl.Visible = full
+		if full then
+			o.box.Position = UDim2.fromOffset(x0, y0); o.box.Size = UDim2.fromOffset(w, h)
+			o.box.BackgroundColor3 = col; o.box.BackgroundTransparency = state.espBoxFill and (0.82 + 0.18 * a) or 1
+			o.bIn.Color = col; o.bIn.Transparency = a
+			o.outl.Position = UDim2.fromOffset(x0, y0); o.outl.Size = UDim2.fromOffset(w, h); o.bOut.Transparency = 0.4 + 0.6 * a
+		end
+		local cor = state.espBox and state.espBoxStyle == 2
+		if cor then
+			local lx, ly = math.max(w * 0.28, 3), math.max(h * 0.2, 3)
+			local x1, y1 = x0 + w, y0 + h
+			local P = Vector2.new
+			local segs = {
+				{ P(x0, y0), P(x0 + lx, y0) }, { P(x0, y0), P(x0, y0 + ly) },
+				{ P(x1, y0), P(x1 - lx, y0) }, { P(x1, y0), P(x1, y0 + ly) },
+				{ P(x0, y1), P(x0 + lx, y1) }, { P(x0, y1), P(x0, y1 - ly) },
+				{ P(x1, y1), P(x1 - lx, y1) }, { P(x1, y1), P(x1, y1 - ly) },
+			}
+			for i, sgm in ipairs(segs) do
+				local f, s = o.corners[i][1], o.corners[i][2]
+				setLine(f, sgm[1], sgm[2], col, a); s.Transparency = 0.35 + 0.65 * a
+			end
+		else
+			for i = 1, 8 do o.corners[i][1].Visible = false end
+		end
+
+		-- Health Bar (links neben der Box)
+		o.hbg.Visible = state.espHealth
+		if state.espHealth then
+			local fr = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+			o.hbg.Position = UDim2.fromOffset(x0 - 6, y0 - 1); o.hbg.Size = UDim2.fromOffset(4, h + 2)
+			o.hbg.BackgroundTransparency = 0.35 + 0.65 * a
+			o.hfill.Position = UDim2.new(0, 1, 1, -1); o.hfill.Size = UDim2.new(1, -2, fr, -2 * fr)
+			o.hfill.BackgroundColor3 = hpColor(fr); o.hfill.BackgroundTransparency = a
+		end
+
+		-- Texte
+		local ts = math.max(12, math.floor(state.espTextSize * (1 - 0.2 * a) + 0.5))
+		o.name.Visible = state.espName
+		if state.espName then
+			o.name.Text = p.DisplayName; o.name.TextSize = ts; o.name.TextColor3 = col
+			o.name.TextTransparency = a; o.name.TextStrokeTransparency = 0.15 + 0.85 * a
+			o.name.Position = UDim2.fromOffset(cx, y0 - ts - 4); o.name.Size = UDim2.fromOffset(240, ts + 2)
+		end
+		o.info.Visible = state.espDistTxt
+		if state.espDistTxt then
+			o.info.Text = ("%dm · %d hp"):format(math.floor(dist), math.floor(hum.Health))
+			o.info.TextSize = math.max(11, ts - 2); o.info.TextColor3 = col
+			o.info.TextTransparency = a; o.info.TextStrokeTransparency = 0.15 + 0.85 * a
+			o.info.Position = UDim2.fromOffset(cx, y0 + h + 3); o.info.Size = UDim2.fromOffset(240, ts)
+		end
+
+		-- Tracer (optional nur, wenn der Spieler im FOV-Kreis ist)
+		local tr = o.tracer[1]
+		local showT = state.espTracer
+		local feet = Vector2.new(cx, y0 + h)
+		if showT and state.espTracerFov then
+			local fc = fovC or mouse
+			showT = (Vector2.new(cx, y0 + h / 2) - fc).Magnitude <= state.fovSize
+		end
+		if showT then
+			local tf = state.espTracerFrom
+			local from = (tf == 2 and mouse) or (tf == 3 and (fovC or mouse)) or (tf == 4 and Vector2.new(vp.X / 2, 2)) or Vector2.new(vp.X / 2, vp.Y - 2)
+			local to = (tf == 4) and Vector2.new(cx, y0) or feet -- von oben: zum Kopf, sonst zu den Füßen
+			setLine(tr, from, to, col, a); o.tracer[2].Transparency = 0.35 + 0.65 * a
+		else
+			tr.Visible = false
+		end
+	end
+	for p, o in pairs(objs) do if not seen[p] then o.root.Visible = false end end
+end)
+table.insert(H.conns, { Disconnect = function() RunService:UnbindFromRenderStep("TSC_ESP") end })
 end
 
 -- ================= ITEM-ESP (gedroppte Tools) =================
@@ -1177,38 +1388,9 @@ local function rootOf(p)
 	return c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c.PrimaryPart), c
 end
 
--- ESP-Text ~5 Hz (120 Spieler)
+-- Dropped-Items-ESP (Spieler-ESP läuft per RenderStep, siehe ESP-Block)
 task.spawn(function()
 	while H.alive do
-		if state.esp then
-			local myRoot = rootOf(lp)
-			local myPos = myRoot and myRoot.Position or cam.CFrame.Position
-			for _, p in ipairs(Players:GetPlayers()) do
-				if p ~= lp then
-					local r, c = rootOf(p)
-					-- nur Chars im Workspace: rausgestreamte (Parent=nil) Label weg; beim Wieder-Reinstreamen
-					-- wird dasselbe Part re-parented und ein altes BillboardGui rendert dann nicht mehr -> frisch bauen
-					if r and c:IsDescendantOf(workspace) then
-						local d = (r.Position - myPos).Magnitude
-						if d <= state.espDist then
-							local e = espObjs[p]
-							if e and e.bb.Adornee ~= r then removeEsp(p) end
-							e = ensureEsp(p)
-							if e.bb.Adornee ~= r then e.bb.Adornee = r end
-							local hum = c:FindFirstChildOfClass("Humanoid")
-							local hp = hum and math.floor(hum.Health) or 0
-							e.lbl.TextColor3 = teamColor(p)
-							applyFade(e.lbl, fadeAlpha(d), 12)
-							e.lbl.Text = p.DisplayName .. "\n" .. math.floor(d) .. "m  HP " .. hp
-						else
-							removeEsp(p)
-						end
-					else
-						removeEsp(p)
-					end
-				end
-			end
-		end
 		-- Dropped Items
 		if state.items then
 			local myRoot = rootOf(lp)
