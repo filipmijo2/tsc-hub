@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam" , "nostam" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -1697,7 +1697,7 @@ end)
 -- (debug.getupvalues der Cell-Handler) bzw. löst per Solver, und feuert die EIGENEN Button-Handler
 -- des Spiels (getconnections) -> das Spiel sendet seine normale Anfrage wie bei einem echten Klick.
 state.ms = sv("ms", true); state.msReader = sv("msReader", true); state.msHints = sv("msHints", true)
-state.msFlags = sv("msFlags", true); state.msPace = sv("msPace", 0)
+state.msFlags = sv("msFlags", true); state.msPace = sv("msPace", 0); state.msClickDelay = sv("msClickDelay", 90)
 toggle(S_ms, "Enabled", "ms", function() end)
 toggle(S_ms, "Mine Reader (instant)", "msReader", function() end)
 toggle(S_ms, "Use Hints", "msHints", function() end)
@@ -1706,6 +1706,10 @@ slider(S_ms, "Solve Time (reader pacing)", 0, 30, state.msPace, function(v)
 	state.msPace = math.floor(v + 0.5)
 	return state.msPace == 0 and "instant" or (state.msPace .. "s")
 end, "msPace")
+slider(S_ms, "Click Delay (server boards)", 0, 300, state.msClickDelay, function(v)
+	state.msClickDelay = math.floor(v / 5 + 0.5) * 5
+	return state.msClickDelay .. " ms"
+end, "msClickDelay")
 local msStatus = info(S_ms, "Status: idle · waiting for hack")
 local function msLog(s)
 	msStatus.Text = "Status: " .. s
@@ -1783,15 +1787,20 @@ local function msBot()
 	-- fire synchronously, no per-click wait; we wait once per batch instead
 	local function revealCell(cell)
 	    local b = cell:FindFirstChild("Button"); if not b then return end
+	    local hid = cell:FindFirstChild("Hidden")
+	    if hid and not hid.Visible then return end -- schon (per Kaskade) aufgedeckt -> kein Doppelklick/Chord
 	    local x, y = centreOf(cell)
 	    fire(b.MouseButton1Down, x, y)
 	    fire(b.MouseButton1Up, x, y)
+	    -- Server-Boards: jeder Klick = HackReveal-Anfrage -> nicht übermenschlich schnell
+	    if state.msClickDelay > 0 then task.wait(state.msClickDelay / 1000 * (0.7 + 0.6 * math.random())) end
 	end
 
 	local function flagCell(cell)
 	    local b = cell:FindFirstChild("Button"); if not b then return end
 	    local x, y = centreOf(cell)
 	    fire(b.MouseButton2Down, x, y)
+	    fire(b.MouseButton2Up, x, y)
 	end
 
 	-- ---- hints -----------------------------------------------------------------
@@ -2903,6 +2912,9 @@ local function msBot()
 	        end
 	    end
 	    if #cells == 0 then return nil end
+	    -- Seit dem Patch erzeugt der SERVER die Minen bei echten Türen (Client: placeMine nur im Übungsmodus,
+	    -- Aufdecken per HackReveal:InvokeServer). Dann steht überall HasMine=false -> kein Vorwissen -> Solver.
+	    if mines == 0 then return nil end
 	    return { cells = cells, mines = mines }
 	end
 
