@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -748,6 +748,52 @@ end
 local recoilInfo
 toggle(S_gun, "No Visual Recoil", "norecoil", function() applyRecoil() end)
 recoilInfo = info(S_gun, "")
+-- ================= AUTO RELOAD =================
+-- LocalGunScript lädt auf InputBegan(KeyCode == ClientSettings.Controls.Reload) nach (Animation + Server-Aufruf).
+-- Magazin (Tool.GunData.Mag) zählt der Server. Mag leer + Reserve da + kein "Reloading" -> echte Reload-Taste
+-- per nativem keypress drücken (VIM kommt in Potassium nicht an) -> normaler Spielweg. Nur wenn Roblox fokussiert.
+state.autoreload = sv("autoreload", false)
+;(function()
+	toggle(S_gun, "Auto Reload", "autoreload", function() end)
+	local lastPress = 0
+	local function reloadKey()
+		local cs = lp:FindFirstChild("ClientSettings")
+		local ctrl = cs and cs:FindFirstChild("Controls")
+		local v = ctrl and ctrl:FindFirstChild("Reload")
+		local ok, kc = pcall(function() return Enum.KeyCode[v and v.Value or "R"] end)
+		return ok and kc or Enum.KeyCode.R
+	end
+	local function vkOf(kc)
+		local n = kc.Name
+		if #n == 1 and n:match("%u") then return string.byte(n) end -- A-Z
+		local map = { One = 0x31, Two = 0x32, Three = 0x33, Four = 0x34, Five = 0x35, Six = 0x36, Seven = 0x37, Eight = 0x38,
+			Nine = 0x39, Zero = 0x30, LeftShift = 0xA0, LeftControl = 0xA2, LeftAlt = 0xA4, Tab = 0x09, CapsLock = 0x14,
+			Backquote = 0xC0, F1 = 0x70, F2 = 0x71, F3 = 0x72, F4 = 0x73 }
+		return map[n]
+	end
+	local isFocused = (typeof(isrbxactive) == "function") and isrbxactive or function() return true end
+	task.spawn(function()
+		while H.alive do
+			if state.autoreload and typeof(keypress) == "function" then
+				local c = lp.Character
+				local tool = c and c:FindFirstChildOfClass("Tool")
+				local gd = tool and tool:FindFirstChild("GunData")
+				local mag = gd and gd:FindFirstChild("Mag")
+				local res = gd and gd:FindFirstChild("ReserveAmmo")
+				if mag and mag.Value <= 0 and (not res or res.Value > 0) and not gd:FindFirstChild("Reloading")
+					and os.clock() - lastPress > 1.5 and isFocused() and not UIS:GetFocusedTextBox() then
+					local vk = vkOf(reloadKey())
+					if vk then
+						lastPress = os.clock()
+						pcall(keypress, vk); task.wait(0.05); pcall(keyrelease, vk)
+					end
+				end
+			end
+			task.wait(0.15)
+		end
+	end)
+end)()
+
 task.spawn(function()
 	while H.alive do
 		-- VisualGun kann neu verbinden (Respawn/Neustart) -> regelmäßig nachziehen
