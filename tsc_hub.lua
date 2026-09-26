@@ -35,7 +35,7 @@ local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDow
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
-	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly" }
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -635,6 +635,7 @@ state.aimSmooth = sv("aimSmooth", true); state.aimSmX = sv("aimSmX", 7.5); state
 state.fov = sv("fov", true); state.fovGlow = sv("fovGlow", false); state.fovFill = sv("fovFill", false)
 state.fovSize = sv("fovSize", 126); state.fovStyle = sv("fovStyle", 1); state.fovColor = sv("fovColor", 1)
 state.fovGunOnly = sv("fovGunOnly", false)
+state.aimGunOnly = sv("aimGunOnly", true)
 
 -- Schusswaffe ausgerüstet? GunData.MagSize > 0 (AK-47: 30, Fäuste: 0). Ergebnis pro Tool gecacht.
 local gunCache = setmetatable({}, { __mode = "k" })
@@ -671,6 +672,7 @@ toggle(S_aim, "Team Check", "aimTeam", function() end)
 toggle(S_aim, "Visible Check", "aimVis", function() end)
 toggle(S_aim, "Health Check", "aimHealth", function() end)
 toggle(S_aim, "Sticky Aim", "aimSticky", function() end)
+toggle(S_aim, "Only With Gun", "aimGunOnly", function() end)
 slider(S_aim, "Distance", 25, 3000, state.aimDist, function(v) state.aimDist = math.floor(v); return tostring(state.aimDist) end, "aimDist")
 slider(S_aim, "Sensitivity", 0.1, 5, state.aimSens, function(v)
 	state.aimSens = math.floor(v * 20 + 0.5) / 20; return ("%.2f"):format(state.aimSens) end, "aimSens")
@@ -784,7 +786,7 @@ RunService:BindToRenderStep("TSC_AIM", Enum.RenderPriority.Camera.Value + 1, fun
 		fovRing.Visible = false
 	end
 
-	if not state.aim or not keyHeld(state.keys.aim) then aimTarget = nil; return end
+	if not state.aim or not keyHeld(state.keys.aim) or (state.aimGunOnly and not gunEquipped()) then aimTarget = nil; return end
 	-- Ziel wählen (Sticky: altes Ziel behalten, solange es gültig bleibt – FOV egal)
 	local part
 	if state.aimSticky and aimTarget then part = aimCheck(aimTarget, fovPos, true) end
@@ -834,6 +836,7 @@ table.insert(H.conns, { Disconnect = function() RunService:UnbindFromRenderStep(
 task.spawn(function()
 	while H.alive do
 		if not state.aim then aimStatus.Text = "Target: - (off)"
+		elseif state.aimGunOnly and not gunEquipped() then aimStatus.Text = "Target: - (no gun equipped)"
 		elseif aimTarget then
 			local c = aimTarget.Character; local rt = c and c:FindFirstChild("HumanoidRootPart")
 			local d = rt and math.floor((rt.Position - cam.CFrame.Position).Magnitude) or 0
@@ -2956,7 +2959,7 @@ local DEFAULTS = { fullbright = false, esp = false, espDist = 1500, espFade = 40
 	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0, turrets = false, nofog = false,
 	aim = false, aimTeam = true, aimVis = true, aimHealth = true, aimSticky = true, aimDist = 600, aimSens = 2, aimPart = 1, aimType = 1,
 	aimRage = false, aimRageType = 1, aimPred = false, aimPredX = 5, aimPredY = 5, aimSmooth = true, aimSmX = 7.5, aimSmY = 7.5,
-	fov = true, fovGlow = false, fovFill = false, fovSize = 126, fovStyle = 1, fovGunOnly = false }
+	fov = true, fovGlow = false, fovFill = false, fovSize = 126, fovStyle = 1, fovGunOnly = false, aimGunOnly = true }
 local cfgStatus
 local function saveCfg()
 	local data = { keys = {} }
