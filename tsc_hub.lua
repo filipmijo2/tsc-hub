@@ -28,7 +28,7 @@ gui.Parent = CoreGui
 local espFolder = Instance.new("Folder"); espFolder.Name = "TSC_ESP"; espFolder.Parent = gui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(260, 614); main.Position = UDim2.fromOffset(40, 200)
+main.Size = UDim2.fromOffset(260, 648); main.Position = UDim2.fromOffset(40, 200)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 28); main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
@@ -273,6 +273,30 @@ task.spawn(function()
 	end
 end)
 
+-- ================= NO FALL DAMAGE =================
+-- ClientFallDamage meldet FallImpact:FireServer(-vel.Y) beim Landen, aber nur wenn > 80.
+-- Hook-frei: in Bodennähe jeden Frame auf 60 kappen (Landung max ~65) -> nichts wird gemeldet.
+state.nofall = false
+local FALL_CAP = 60
+local fallParams = RaycastParams.new(); fallParams.FilterType = Enum.RaycastFilterType.Exclude
+mkToggle(342, "No Fall Damage", "nofall", function() end)
+con(RunService.Heartbeat, function(dt)
+	if not state.nofall then return end
+	local c = lp.Character
+	local r = c and c:FindFirstChild("HumanoidRootPart")
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	if not (r and hum) then return end
+	local v = r.AssemblyLinearVelocity
+	if v.Y >= -FALL_CAP then return end
+	fallParams.FilterDescendantsInstances = { c }
+	-- Vorausschau: Strecke der nächsten ~3 Frames + Hüfthöhe + Puffer
+	local look = -v.Y * math.max(dt, 1 / 60) * 3 + hum.HipHeight + r.Size.Y / 2 + 6
+	local hit = workspace:Raycast(r.Position, Vector3.new(0, -look, 0), fallParams)
+	if hit then
+		r.AssemblyLinearVelocity = Vector3.new(v.X, -FALL_CAP, v.Z)
+	end
+end)
+
 -- ================= MARKER =================
 local markHL = Instance.new("Highlight")
 markHL.Name = "TSC_MARK_HL"; markHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
@@ -297,26 +321,26 @@ arrow.Font = Enum.Font.GothamBlack; arrow.TextSize = 16; arrow.TextColor3 = Colo
 arrow.TextStrokeTransparency = 0; arrow.Visible = false; arrow.Parent = gui
 
 local markInfo = Instance.new("TextLabel")
-markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 342)
+markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 376)
 markInfo.BackgroundTransparency = 1; markInfo.Font = Enum.Font.Gotham; markInfo.TextSize = 13
 markInfo.TextColor3 = Color3.fromRGB(255, 120, 120); markInfo.TextXAlignment = Enum.TextXAlignment.Left
 markInfo.Text = "Marker: -"; markInfo.Parent = main
 
 local clearBtn = Instance.new("TextButton")
-clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 342)
+clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 376)
 clearBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40); clearBtn.BorderSizePixel = 0; clearBtn.Font = Enum.Font.Gotham
 clearBtn.TextSize = 12; clearBtn.TextColor3 = Color3.new(1, 1, 1); clearBtn.Text = "weg"; clearBtn.Parent = main
 Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 5)
 
 local search = Instance.new("TextBox")
-search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 368)
+search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 402)
 search.BackgroundColor3 = Color3.fromRGB(40, 42, 50); search.BorderSizePixel = 0; search.Font = Enum.Font.Gotham
 search.TextSize = 13; search.TextColor3 = Color3.new(1, 1, 1); search.PlaceholderText = "Spieler suchen..."
 search.Text = ""; search.ClearTextOnFocus = false; search.Parent = main
 Instance.new("UICorner", search).CornerRadius = UDim.new(0, 5)
 
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, -16, 1, -406); list.Position = UDim2.fromOffset(8, 398)
+list.Size = UDim2.new(1, -16, 1, -440); list.Position = UDim2.fromOffset(8, 432)
 list.BackgroundColor3 = Color3.fromRGB(28, 30, 36); list.BorderSizePixel = 0; list.ScrollBarThickness = 5
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y; list.CanvasSize = UDim2.new(); list.Parent = main
 local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.Name
