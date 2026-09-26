@@ -25,7 +25,7 @@ if type(saved) ~= "table" then saved = {} end
 local function sv(k, def) if saved[k] ~= nil then return saved[k] end return def end
 local function kc(n, def) local ok, k = pcall(function() return Enum.KeyCode[n] end) return (ok and k) or def end
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
-	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed" }
+	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -640,6 +640,44 @@ con(RunService.Heartbeat, function(dt)
 		r.AssemblyLinearVelocity = Vector3.new(v.X, -FALL_CAP, v.Z)
 	end
 end)
+
+-- ================= DESYNC INVIS =================
+-- Eigener Char ist client-owned -> der Server übernimmt die CFrame, die nach Heartbeat gesendet wird.
+-- Heartbeat: HRP auf Versteck (senkrecht unter mir, Y=-depth; Map geht bis ~-611, FallenPartsDestroyHeight=-5000)
+-- -> das repliziert. Vor dem Rendern (RenderPriority.First) zurück auf echte Pos -> Physik/Kamera/Bewegung lokal normal.
+-- Folgen: andere sehen/streamen dich nicht; serverseitige Distanzchecks (Prompts, Türen, Pickups, evtl. Guns) laufen ins Leere.
+state.desync = false -- bewusst NICHT persistent: nie automatisch beim Laden an
+state.desyncDepth = sv("desyncDepth", 2000)
+local desyncReal = nil
+toggle(S_move, "Desync Invis (risky)", "desync", function(on)
+	if not on and desyncReal then
+		local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+		if r then r.CFrame = desyncReal end
+		desyncReal = nil
+	end
+end)
+slider(S_move, "Hide Depth (Y)", 800, 4500, state.desyncDepth, function(v)
+	state.desyncDepth = math.floor(v / 50 + 0.5) * 50
+	return "-" .. state.desyncDepth
+end, "desyncDepth")
+info(S_move, "Others see nothing; prompts/doors/pickups won't work while on (server thinks you're underground).")
+con(RunService.Heartbeat, function()
+	if not state.desync then return end
+	local c = lp.Character
+	local r = c and c:FindFirstChild("HumanoidRootPart")
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	if not (r and hum) or hum.Health <= 0 then desyncReal = nil return end
+	desyncReal = r.CFrame
+	r.CFrame = CFrame.new(r.Position.X, -state.desyncDepth, r.Position.Z) * (r.CFrame - r.CFrame.Position)
+end)
+RunService:BindToRenderStep("TSC_DesyncRestore", Enum.RenderPriority.First.Value, function()
+	if desyncReal then
+		local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+		if r then r.CFrame = desyncReal end
+		desyncReal = nil
+	end
+end)
+table.insert(H.conns, { Disconnect = function() pcall(function() RunService:UnbindFromRenderStep("TSC_DesyncRestore") end) end })
 
 -- ================= TURRET WIPE =================
 -- workspace.EOP.TurretsFolder: vorhandene Turrets lokal löschen + neu gestreamte/gespawnte beim Erscheinen.
@@ -2630,6 +2668,7 @@ function H.kill()
 	pcall(ventFlush)
 	pcall(restoreFB)
 	pcall(perfRestore)
+	pcall(function() if desyncReal then lp.Character.HumanoidRootPart.CFrame = desyncReal end end)
 	pcall(function() gui:Destroy() end)
 end
 
