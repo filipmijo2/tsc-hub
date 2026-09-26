@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam" , "infsprint" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam" , "nostam" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -1218,40 +1218,65 @@ con(RunService.Heartbeat, function(dt)
 	end
 end)
 
--- ================= INFINITE SPRINT =================
--- Stamina ist rein clientseitig (FrameworkActor.FrameworkClient.Stamina): leer -> Client setzt State "none" +
--- WalkSpeed zurück; der Server kennt die Stamina nicht. Solange Shift gehalten + bewegt: WalkSpeed auf
--- Sprint-Tempo halten (Basis 12 + Running 12 = 24, genau das legit Sprint-Tempo). Shift los -> Basis zurück.
+-- ================= INFINITE STAMINA =================
+-- Stamina lebt rein clientseitig im Actor PlayerScripts.FrameworkActor (FrameworkClient.Stamina-Tabelle mit
+-- step/publish/Value/Max). Per run_on_actor läuft dort ein Loop, der Value jeden Frame auf Max setzt -> kein
+-- Verbrauch, Anzeige bleibt voll. Steuerung über Attribute am Actor (TSC_NoStam an/aus, TSC_NSGen = Instanz-ID:
+-- alter Loop beendet sich bei Re-Execute selbst). Keine Hooks, nur Tabellenwert.
+state.nostam = sv("nostam", false)
 do
-	state.infsprint = sv("infsprint", false)
-	local SPRINT_SPEED = 24
-	local sprintBase = nil
-	toggle(S_move, "Infinite Sprint", "infsprint", function(on)
-		if not on and sprintBase then
-			local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-			if hum and hum.WalkSpeed == SPRINT_SPEED then hum.WalkSpeed = sprintBase end
-			sprintBase = nil
-		end
-	end)
-	con(RunService.Heartbeat, function()
-		if not state.infsprint then return end
-		local c = lp.Character
-		local hum = c and c:FindFirstChildOfClass("Humanoid")
-		if not hum or hum.Health <= 0 then sprintBase = nil return end
-		local st = lp:GetAttribute("State")
-		local want = UIS:IsKeyDown(Enum.KeyCode.LeftShift) and hum.MoveDirection.Magnitude > 0
-			and not hum:GetAttribute("MovementDisabled") and st ~= "Crouching" and st ~= "Crawling"
-			and not UIS:GetFocusedTextBox()
-		if want then
-			if hum.WalkSpeed < SPRINT_SPEED then
-				if not sprintBase then sprintBase = hum.WalkSpeed end
-				hum.WalkSpeed = SPRINT_SPEED
+	local actor = lp:WaitForChild("PlayerScripts"):FindFirstChild("FrameworkActor")
+	local gen = tostring(os.clock()) .. "_" .. tostring(math.random(1, 1e9))
+	local stamInfo
+	local function setFlag()
+		if actor then pcall(function() actor:SetAttribute("TSC_NoStam", state.nostam and true or false) end) end
+	end
+	toggle(S_move, "Infinite Stamina", "nostam", function() setFlag() end)
+	stamInfo = info(S_move, "")
+	if actor and run_on_actor then
+		pcall(function() actor:SetAttribute("TSC_NSGen", gen) end)
+		setFlag()
+		pcall(run_on_actor, actor, [==[
+			local actor = script and script:FindFirstAncestorOfClass("Actor") or game:GetService("Players").LocalPlayer.PlayerScripts:FindFirstChild("FrameworkActor")
+			local myGen = actor:GetAttribute("TSC_NSGen")
+			local RS = game:GetService("RunService")
+			local tbl, lastScan = nil, 0
+			local function scan()
+				for _, t in ipairs(getgc(true)) do
+					if type(t) == "table" and rawget(t, "LockDebuff") ~= nil and rawget(t, "Max") ~= nil
+						and type(rawget(t, "step")) == "function" then
+						return t
+					end
+				end
 			end
-		elseif sprintBase then
-			if hum.WalkSpeed == SPRINT_SPEED and st ~= "Running" then hum.WalkSpeed = sprintBase end
-			sprintBase = nil
-		end
-	end)
+			while actor:GetAttribute("TSC_NSGen") == myGen do
+				if actor:GetAttribute("TSC_NoStam") then
+					if not tbl and os.clock() - lastScan > 3 then lastScan = os.clock(); tbl = scan() end
+					if tbl then
+						local ok = pcall(function()
+							if tbl.Value < tbl.Max then tbl.Value = tbl.Max end
+							if (tbl.Bool or 0) > 0 then tbl.Bool = 0 end
+						end)
+						if not ok then tbl = nil end
+					end
+					actor:SetAttribute("TSC_NSFound", tbl ~= nil)
+				end
+				RS.Heartbeat:Wait()
+			end
+		]==])
+		task.spawn(function()
+			while H.alive do
+				local found = actor:GetAttribute("TSC_NSFound")
+				stamInfo.Text = state.nostam and (found and '<font color="#78ff8c">stamina locked at max</font>' or "searching stamina table...") or ""
+				task.wait(1)
+			end
+		end)
+		table.insert(H.conns, { Disconnect = function()
+			pcall(function() actor:SetAttribute("TSC_NSGen", nil); actor:SetAttribute("TSC_NoStam", false) end)
+		end })
+	else
+		stamInfo.Text = "FrameworkActor / run_on_actor not available"
+	end
 end
 
 -- ================= DESYNC INVIS =================
