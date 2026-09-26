@@ -23,21 +23,32 @@ local saved = {}
 pcall(function() if isfile(SAVE_FILE) then saved = HttpService:JSONDecode(readfile(SAVE_FILE)) end end)
 if type(saved) ~= "table" then saved = {} end
 local function sv(k, def) if saved[k] ~= nil then return saved[k] end return def end
-local function kc(n, def) local ok, k = pcall(function() return Enum.KeyCode[n] end) return (ok and k) or def end
+local function kc(n, def)
+	if type(n) ~= "string" then return def end
+	local ok, k = pcall(function() return Enum.KeyCode[n] end); if ok and k then return k end
+	ok, k = pcall(function() return Enum.UserInputType[n] end); if ok and k then return k end
+	return def
+end
+-- Keybind = KeyCode oder Maustaste (UserInputType)
+local function keyMatch(i, k) if k.EnumType == Enum.KeyCode then return i.KeyCode == k end return i.UserInputType == k end
+local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDown(k) end return UIS:IsMouseButtonPressed(k) end
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
-	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth" }
+	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
+	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
-	keys = { menu = kc(sv("keyMenu", "RightShift"), Enum.KeyCode.RightShift), vent = kc(sv("keyVent", "End"), Enum.KeyCode.End) } }
+	keys = { menu = kc(sv("keyMenu", "RightShift"), Enum.KeyCode.RightShift), vent = kc(sv("keyVent", "End"), Enum.KeyCode.End),
+		aim = kc(sv("keyAim", "MouseButton2"), Enum.UserInputType.MouseButton2) } }
 H.state = state
 
 -- ================= THEME / GUI-BAUKASTEN (Matcha-Stil) =================
 local T = {
-	bg = Color3.fromRGB(17, 17, 17), panel = Color3.fromRGB(23, 23, 23), stroke = Color3.fromRGB(40, 40, 40),
-	edge = Color3.fromRGB(52, 52, 52), track = Color3.fromRGB(38, 38, 38), off = Color3.fromRGB(48, 48, 48),
-	accent = Color3.fromRGB(245, 168, 222), text = Color3.fromRGB(232, 232, 232), dim = Color3.fromRGB(118, 118, 118),
-	font = Enum.Font.Code, ts = 13,
+	bg = Color3.fromRGB(15, 15, 18), panel = Color3.fromRGB(20, 20, 24), panel2 = Color3.fromRGB(25, 25, 30),
+	stroke = Color3.fromRGB(36, 36, 43), edge = Color3.fromRGB(46, 46, 54), track = Color3.fromRGB(32, 32, 38),
+	off = Color3.fromRGB(34, 34, 41), accent = Color3.fromRGB(190, 70, 150), text = Color3.fromRGB(226, 226, 232),
+	dim = Color3.fromRGB(122, 122, 134), font = Enum.Font.GothamMedium, bold = Enum.Font.GothamBold, ts = 13,
 }
 
 local gui = Instance.new("ScreenGui")
@@ -58,16 +69,24 @@ local function txt(parent, text, size, color)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(540, 470); main.Position = UDim2.fromOffset(sv("guiX", 40), sv("guiY", 160))
+main.Size = UDim2.fromOffset(560, 500); main.Position = UDim2.fromOffset(sv("guiX", 40), sv("guiY", 160))
 main.Visible = sv("guiVisible", true)
 main.BackgroundColor3 = T.bg; main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
-corner(main, 4); stroke(main, T.edge)
+corner(main, 8); stroke(main, T.edge)
 
 local titleBar = Instance.new("Frame")
-titleBar.Size = UDim2.new(1, 0, 0, 26); titleBar.BackgroundTransparency = 1; titleBar.Active = true; titleBar.Parent = main
-txt(titleBar, "◆", UDim2.fromOffset(14, 26), T.accent).Position = UDim2.fromOffset(10, 0)
-txt(titleBar, "TSC Hub - " .. lp.Name, UDim2.new(1, -40, 1, 0)).Position = UDim2.fromOffset(28, 0)
+titleBar.Size = UDim2.new(1, 0, 0, 30); titleBar.BackgroundTransparency = 1; titleBar.Active = true; titleBar.Parent = main
+do
+	local tl2 = Instance.new("UIListLayout", titleBar); tl2.FillDirection = Enum.FillDirection.Horizontal
+	tl2.VerticalAlignment = Enum.VerticalAlignment.Center; tl2.Padding = UDim.new(0, 8); tl2.SortOrder = Enum.SortOrder.LayoutOrder
+	Instance.new("UIPadding", titleBar).PaddingLeft = UDim.new(0, 12)
+	local a = txt(titleBar, "TSC Hub", UDim2.fromOffset(0, 30), T.accent); a.Font = T.bold; a.AutomaticSize = Enum.AutomaticSize.X; a.LayoutOrder = 1
+	local b = txt(titleBar, "Interface", UDim2.fromOffset(0, 30), T.text); b.AutomaticSize = Enum.AutomaticSize.X; b.LayoutOrder = 2
+	local c = txt(titleBar, lp.Name, UDim2.fromOffset(0, 18), T.accent); c.AutomaticSize = Enum.AutomaticSize.X; c.LayoutOrder = 3
+	c.TextSize = 12; c.BackgroundColor3 = Color3.fromRGB(40, 18, 34); c.BackgroundTransparency = 0; corner(c, 6); stroke(c, Color3.fromRGB(90, 34, 72))
+	local cp = Instance.new("UIPadding", c); cp.PaddingLeft = UDim.new(0, 7); cp.PaddingRight = UDim.new(0, 7)
+end
 
 -- Drag
 do
@@ -86,18 +105,21 @@ end
 
 -- Tabs
 local tabBar = Instance.new("Frame")
-tabBar.Size = UDim2.new(1, -20, 0, 18); tabBar.Position = UDim2.fromOffset(10, 26); tabBar.BackgroundTransparency = 1; tabBar.Parent = main
-local tl = Instance.new("UIListLayout", tabBar); tl.FillDirection = Enum.FillDirection.Horizontal; tl.Padding = UDim.new(0, 12)
+tabBar.Size = UDim2.new(1, -20, 0, 26); tabBar.Position = UDim2.fromOffset(8, 32); tabBar.BackgroundTransparency = 1; tabBar.Parent = main
+local tl = Instance.new("UIListLayout", tabBar); tl.FillDirection = Enum.FillDirection.Horizontal; tl.Padding = UDim.new(0, 4)
 tl.SortOrder = Enum.SortOrder.LayoutOrder
 
 local content = Instance.new("Frame")
-content.Size = UDim2.new(1, -16, 1, -56); content.Position = UDim2.fromOffset(8, 48); content.BackgroundTransparency = 1
+content.Size = UDim2.new(1, -16, 1, -74); content.Position = UDim2.fromOffset(8, 66); content.BackgroundTransparency = 1
 content.Parent = main
 
-local pages, tabBtns = {}, {}
+local pages, tabBtns, tabStrokes = {}, {}, {}
 local function selectTab(name)
 	for n, pg in pairs(pages) do pg.Visible = (n == name) end
-	for n, b in pairs(tabBtns) do b.TextColor3 = (n == name) and T.text or T.dim end
+	for n, b in pairs(tabBtns) do
+		local on = n == name
+		b.TextColor3 = on and T.text or T.dim; b.BackgroundTransparency = on and 0 or 1; tabStrokes[n].Transparency = on and 0 or 1
+	end
 end
 local function mkCol(page, right)
 	local c = Instance.new("ScrollingFrame")
@@ -109,16 +131,55 @@ local function mkCol(page, right)
 	p.PaddingTop = UDim.new(0, 1); p.PaddingLeft = UDim.new(0, 1); p.PaddingRight = UDim.new(0, 5); p.PaddingBottom = UDim.new(0, 1)
 	return c
 end
-local function tab(name)
+local function tab(name, raw)
 	local b = Instance.new("TextButton")
 	b.AutomaticSize = Enum.AutomaticSize.X; b.Size = UDim2.new(0, 0, 1, 0); b.BackgroundTransparency = 1
+	b.BackgroundColor3 = T.panel2; b.AutoButtonColor = false
 	b.Font = T.font; b.TextSize = T.ts; b.Text = name; b.TextColor3 = T.dim; b.LayoutOrder = #tabBar:GetChildren()
 	b.Parent = tabBar
+	corner(b, 6); tabStrokes[name] = stroke(b, T.edge)
+	local bp = Instance.new("UIPadding", b); bp.PaddingLeft = UDim.new(0, 12); bp.PaddingRight = UDim.new(0, 12)
 	local page = Instance.new("Frame"); page.Size = UDim2.fromScale(1, 1); page.BackgroundTransparency = 1; page.Visible = false
 	page.Parent = content
 	pages[name] = page; tabBtns[name] = b
 	con(b.MouseButton1Click, function() selectTab(name) end)
+	if raw then return page end
 	return mkCol(page, false), mkCol(page, true)
+end
+
+-- Unter-Tabs (Pill-Leiste oben in einer Seite), liefert je Unter-Tab {links, rechts}
+local function subtabs(page, names)
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.new(0, 0, 0, 28); bar.AutomaticSize = Enum.AutomaticSize.X; bar.BackgroundColor3 = T.panel
+	bar.Parent = page
+	corner(bar, 7); stroke(bar)
+	local bl = Instance.new("UIListLayout", bar); bl.FillDirection = Enum.FillDirection.Horizontal; bl.Padding = UDim.new(0, 2)
+	bl.VerticalAlignment = Enum.VerticalAlignment.Center; bl.SortOrder = Enum.SortOrder.LayoutOrder
+	local bpad = Instance.new("UIPadding", bar); bpad.PaddingLeft = UDim.new(0, 3); bpad.PaddingRight = UDim.new(0, 3)
+	local subs, btns, out = {}, {}, {}
+	local function pick(n)
+		for k, f in pairs(subs) do f.Visible = (k == n) end
+		for k, b in pairs(btns) do
+			local on = k == n
+			b.TextColor3 = on and T.accent or T.dim; b.BackgroundTransparency = on and 0 or 1
+		end
+	end
+	for i, n in ipairs(names) do
+		local b = Instance.new("TextButton")
+		b.AutomaticSize = Enum.AutomaticSize.X; b.Size = UDim2.new(0, 0, 0, 22); b.BackgroundColor3 = T.panel2
+		b.BackgroundTransparency = 1; b.AutoButtonColor = false; b.Font = T.font; b.TextSize = 12; b.Text = n
+		b.TextColor3 = T.dim; b.LayoutOrder = i; b.Parent = bar
+		corner(b, 5)
+		local pp = Instance.new("UIPadding", b); pp.PaddingLeft = UDim.new(0, 10); pp.PaddingRight = UDim.new(0, 10)
+		local f = Instance.new("Frame")
+		f.Size = UDim2.new(1, 0, 1, -36); f.Position = UDim2.fromOffset(0, 36); f.BackgroundTransparency = 1; f.Visible = false
+		f.Parent = page
+		subs[n] = f; btns[n] = b
+		out[n] = { mkCol(f, false), mkCol(f, true) }
+		con(b.MouseButton1Click, function() pick(n) end)
+	end
+	pick(names[1])
+	return out
 end
 
 local secN = 0
@@ -127,24 +188,24 @@ local function section(col, name)
 	local f = Instance.new("Frame")
 	f.BackgroundColor3 = T.panel; f.BorderSizePixel = 0; f.Size = UDim2.new(1, 0, 0, 0); f.AutomaticSize = Enum.AutomaticSize.Y
 	f.LayoutOrder = secN; f.Parent = col
-	stroke(f); corner(f, 3)
+	stroke(f); corner(f, 7)
 	local pd = Instance.new("UIPadding", f)
-	pd.PaddingTop = UDim.new(0, 6); pd.PaddingBottom = UDim.new(0, 8); pd.PaddingLeft = UDim.new(0, 8); pd.PaddingRight = UDim.new(0, 8)
-	local l = Instance.new("UIListLayout", f); l.Padding = UDim.new(0, 5); l.SortOrder = Enum.SortOrder.LayoutOrder
-	txt(f, name, UDim2.new(1, 0, 0, 16)).LayoutOrder = 0
+	pd.PaddingTop = UDim.new(0, 8); pd.PaddingBottom = UDim.new(0, 10); pd.PaddingLeft = UDim.new(0, 10); pd.PaddingRight = UDim.new(0, 10)
+	local l = Instance.new("UIListLayout", f); l.Padding = UDim.new(0, 7); l.SortOrder = Enum.SortOrder.LayoutOrder
+	local h = txt(f, name, UDim2.new(1, 0, 0, 16)); h.Font = T.bold; h.LayoutOrder = 0
 	return { f = f, n = 0 }
 end
 local function nextOrder(S) S.n = S.n + 1 return S.n end
 
 -- Keybinds: Klick auf Box -> nächste Taste belegen (Escape = abbrechen)
 local listening, keyBoxes = nil, {}
-local function keyName(k) return k and k.Name:lower() or "none" end
+local function keyName(k) return k and (k.Name:lower():gsub("mousebutton", "mouse")) or "none" end
 local function keybox(parent, id)
 	local b = Instance.new("TextButton")
-	b.Size = UDim2.fromOffset(78, 16); b.AnchorPoint = Vector2.new(1, 0); b.Position = UDim2.new(1, 0, 0, 0)
-	b.BackgroundColor3 = T.track; b.BorderSizePixel = 0; b.AutoButtonColor = false
-	b.Font = T.font; b.TextSize = 12; b.TextColor3 = T.dim; b.Text = keyName(state.keys[id]); b.Parent = parent
-	stroke(b); corner(b, 2)
+	b.Size = UDim2.fromOffset(78, 18); b.AnchorPoint = Vector2.new(1, 0); b.Position = UDim2.new(1, 0, 0, 0)
+	b.BackgroundColor3 = T.panel2; b.BorderSizePixel = 0; b.AutoButtonColor = false
+	b.Font = T.font; b.TextSize = 12; b.TextColor3 = T.text; b.Text = keyName(state.keys[id]); b.Parent = parent
+	stroke(b, T.edge); corner(b, 9)
 	keyBoxes[id] = b
 	con(b.MouseButton1Click, function() listening = id; b.Text = "..."; b.TextColor3 = T.accent end)
 	return b
@@ -154,13 +215,13 @@ local refresh = {}
 local ctl = {} -- Config: [id] = {get=, set=}
 local function toggle(S, label, key, onChange, bindId)
 	local row = Instance.new("TextButton")
-	row.AutoButtonColor = false; row.BackgroundTransparency = 1; row.Text = ""; row.Size = UDim2.new(1, 0, 0, 16)
+	row.AutoButtonColor = false; row.BackgroundTransparency = 1; row.Text = ""; row.Size = UDim2.new(1, 0, 0, 18)
 	row.LayoutOrder = nextOrder(S); row.Parent = S.f
 	local dot = Instance.new("Frame")
-	dot.Size = UDim2.fromOffset(12, 12); dot.Position = UDim2.fromOffset(0, 2); dot.BorderSizePixel = 0; dot.Parent = row
-	Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+	dot.Size = UDim2.fromOffset(17, 17); dot.Position = UDim2.fromOffset(0, 0); dot.BorderSizePixel = 0; dot.Parent = row
+	corner(dot, 4)
 	stroke(dot)
-	local l = txt(row, label, UDim2.new(1, bindId and -104 or -20, 1, 0)); l.Position = UDim2.fromOffset(20, 0)
+	local l = txt(row, label, UDim2.new(1, bindId and -112 or -28, 1, 0)); l.Position = UDim2.fromOffset(27, 0)
 	if bindId then keybox(row, bindId) end
 	local function paint()
 		local on = state[key]
@@ -173,7 +234,7 @@ local function toggle(S, label, key, onChange, bindId)
 	refresh[key] = paint
 	ctl[key] = { get = function() return state[key] end,
 		set = function(v) if state[key] ~= v then state[key] = v; paint(); task.spawn(onChange, v) end end }
-	return paint
+	return paint, row
 end
 
 local function keyRow(S, label, id)
@@ -185,17 +246,20 @@ end
 
 -- Slider: Label oben, Pill mit pinker Füllung + Wert mittig; onSet(v) liefert Werttext
 local function slider(S, label, minV, maxV, init, onSet, id)
-	txt(S.f, label, UDim2.new(1, 0, 0, 14)).LayoutOrder = nextOrder(S)
+	local head = Instance.new("Frame"); head.BackgroundTransparency = 1; head.Size = UDim2.new(1, 0, 0, 15)
+	head.LayoutOrder = nextOrder(S); head.Parent = S.f
+	txt(head, label, UDim2.new(1, -70, 1, 0))
+	local val = txt(head, "", UDim2.new(0, 70, 1, 0), T.text)
+	val.AnchorPoint = Vector2.new(1, 0); val.Position = UDim2.new(1, 0, 0, 0); val.TextXAlignment = Enum.TextXAlignment.Right
+	local hit = Instance.new("Frame"); hit.BackgroundTransparency = 1; hit.Size = UDim2.new(1, 0, 0, 12); hit.Active = true
+	hit.LayoutOrder = nextOrder(S); hit.Parent = S.f
 	local bar = Instance.new("Frame")
-	bar.Size = UDim2.new(1, 0, 0, 14); bar.BackgroundColor3 = T.track; bar.BorderSizePixel = 0; bar.Active = true
-	bar.LayoutOrder = nextOrder(S); bar.Parent = S.f
-	corner(bar, 7)
+	bar.Size = UDim2.new(1, 0, 0, 6); bar.Position = UDim2.fromOffset(0, 3); bar.BackgroundColor3 = T.track; bar.BorderSizePixel = 0
+	bar.Parent = hit
+	corner(bar, 3)
 	local fill = Instance.new("Frame")
 	fill.BackgroundColor3 = T.accent; fill.BorderSizePixel = 0; fill.Parent = bar
-	corner(fill, 7)
-	local val = txt(bar, "", UDim2.fromScale(1, 1), T.text)
-	val.TextXAlignment = Enum.TextXAlignment.Center; val.TextSize = 12; val.ZIndex = 2
-	val.TextStrokeTransparency = 0.55; val.TextStrokeColor3 = Color3.new(0, 0, 0)
+	corner(fill, 3)
 	local raw = init
 	local function set(v)
 		v = math.clamp(v, minV, maxV); raw = v
@@ -206,7 +270,7 @@ local function slider(S, label, minV, maxV, init, onSet, id)
 	if id then ctl[id] = { get = function() return raw end, set = set } end
 	local sliding = false
 	local function fromX(x) set(minV + (x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X * (maxV - minV)) end
-	con(bar.InputBegan, function(i)
+	con(hit.InputBegan, function(i)
 		if i.UserInputType == Enum.UserInputType.MouseButton1 then sliding = true; fromX(i.Position.X) end
 	end)
 	con(UIS.InputChanged, function(i)
@@ -219,22 +283,22 @@ end
 local function dropdown(S, label, opts, idx, onSel, id)
 	txt(S.f, label, UDim2.new(1, 0, 0, 14)).LayoutOrder = nextOrder(S)
 	local box = Instance.new("TextButton")
-	box.Size = UDim2.new(1, 0, 0, 18); box.BackgroundColor3 = T.track; box.BorderSizePixel = 0; box.AutoButtonColor = false
+	box.Size = UDim2.new(1, 0, 0, 28); box.BackgroundColor3 = T.panel2; box.BorderSizePixel = 0; box.AutoButtonColor = false
 	box.Text = ""; box.LayoutOrder = nextOrder(S); box.Parent = S.f
-	stroke(box); corner(box, 2)
-	local cur = txt(box, opts[idx], UDim2.new(1, -24, 1, 0)); cur.Position = UDim2.fromOffset(6, 0)
-	local arr = txt(box, "▼", UDim2.new(0, 14, 1, 0), T.text); arr.Position = UDim2.new(1, -16, 0, 0); arr.TextSize = 10
+	stroke(box); corner(box, 6)
+	local cur = txt(box, opts[idx], UDim2.new(1, -34, 1, 0)); cur.Position = UDim2.fromOffset(10, 0)
+	local arr = txt(box, "▼", UDim2.new(0, 14, 1, 0), T.dim); arr.Position = UDim2.new(1, -22, 0, 0); arr.TextSize = 10
 	local list = Instance.new("Frame")
 	list.Size = UDim2.new(1, 0, 0, 0); list.AutomaticSize = Enum.AutomaticSize.Y; list.BackgroundColor3 = T.bg
 	list.BorderSizePixel = 0; list.Visible = false; list.LayoutOrder = nextOrder(S); list.Parent = S.f
-	stroke(list)
+	stroke(list); corner(list, 6)
 	Instance.new("UIListLayout", list).SortOrder = Enum.SortOrder.LayoutOrder
 	local items = {}
 	local function paint() for i, b in ipairs(items) do b.TextColor3 = (i == idx) and T.accent or T.dim end end
 	for i, o in ipairs(opts) do
 		local b = Instance.new("TextButton")
-		b.Size = UDim2.new(1, 0, 0, 17); b.BackgroundTransparency = 1; b.Font = T.font; b.TextSize = 12
-		b.Text = "  " .. o; b.TextXAlignment = Enum.TextXAlignment.Left; b.LayoutOrder = i; b.Parent = list
+		b.Size = UDim2.new(1, 0, 0, 22); b.BackgroundTransparency = 1; b.Font = T.font; b.TextSize = 12
+		b.Text = "   " .. o; b.TextXAlignment = Enum.TextXAlignment.Left; b.LayoutOrder = i; b.Parent = list
 		items[i] = b
 		con(b.MouseButton1Click, function()
 			idx = i; cur.Text = o; list.Visible = false; arr.Text = "▼"; paint(); task.spawn(onSel, i)
@@ -248,9 +312,9 @@ end
 
 local function button(S, label, fn)
 	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(1, 0, 0, 18); b.BackgroundColor3 = T.track; b.BorderSizePixel = 0; b.AutoButtonColor = false
+	b.Size = UDim2.new(1, 0, 0, 26); b.BackgroundColor3 = T.panel2; b.BorderSizePixel = 0; b.AutoButtonColor = false
 	b.Font = T.font; b.TextSize = 12; b.TextColor3 = T.text; b.Text = label; b.LayoutOrder = nextOrder(S); b.Parent = S.f
-	stroke(b); corner(b, 2)
+	stroke(b); corner(b, 6)
 	con(b.MouseButton1Click, fn)
 	con(b.MouseEnter, function() b.TextColor3 = T.accent end)
 	con(b.MouseLeave, function() b.TextColor3 = T.text end)
@@ -265,14 +329,13 @@ local function info(S, text, color)
 end
 
 -- Seiten + Sektionen
-local comL = tab("Combat")
+local comPage = tab("Combat", true)
 local visL, visR = tab("Visuals")
 local miscL, miscR = tab("Misc")
 local optL, optR = tab("Options")
 local cfgL = tab("Config")
 local plL, plR = tab("Players")
 
-local S_combat = section(comL, "Combat")
 local S_light = section(visL, "Lighting")
 local S_items = section(visL, "Items")
 local S_esp = section(visR, "ESP")
@@ -287,7 +350,6 @@ local S_perf = section(optR, "Performance")
 local S_cfg = section(cfgL, "Config")
 local S_mark = section(plL, "Target")
 local S_plInfo = section(plR, "Info")
-info(S_combat, "Nothing here yet.")
 
 -- ================= AUTO VENT =================
 -- Spiel (VentSystemL, jedes RenderStepped): u8 = (MausX - Frame.AbsX)/Frame.AbsW; drin wenn Green.X < u8 < Green.X+Green.W
@@ -420,7 +482,7 @@ task.spawn(function()
 		if hasMove then
 			local s
 			if not state.vent then s = "off"
-			elseif V.open then s = ('<font color="#f5a8de">aiming</font> · lag %.1ff · x%.2f'):format(V.lagF, V.mult)
+			elseif V.open then s = ('<font color="#d266b4">aiming</font> · lag %.1ff · x%.2f'):format(V.lagF, V.mult)
 			else s = "idle · waiting for vent" end
 			ventStatus.Text = "Status: " .. s
 		end
@@ -480,6 +542,234 @@ slider(S_light, "Brightness", 0, 10, state.bright, function(v)
 	if state.fullbright then pcall(applyFB) end
 	return ("%.1f/10.0"):format(v)
 end, "brightness")
+
+-- ================= REMOVE FOG =================
+-- Nur Nebel/Dunst weg (Atmosphere Density/Haze, Fog), Licht bleibt wie es ist. Zonen setzen Lighting neu -> nachziehen.
+state.nofog = sv("nofog", false)
+local fogOrig, atmoOrig = {}, {}
+local function applyNoFog()
+	if fogOrig.FogEnd == nil then fogOrig.FogEnd = Lighting.FogEnd; fogOrig.FogStart = Lighting.FogStart end
+	if Lighting.FogEnd ~= 1e6 then Lighting.FogEnd = 1e6 end
+	if Lighting.FogStart ~= 1e6 then Lighting.FogStart = 1e6 end
+	for _, o in ipairs(Lighting:GetChildren()) do
+		if o:IsA("Atmosphere") then
+			if not atmoOrig[o] then atmoOrig[o] = { Density = o.Density, Haze = o.Haze } end
+			if o.Density ~= 0 then o.Density = 0 end
+			if o.Haze ~= 0 then o.Haze = 0 end
+		end
+	end
+end
+local function restoreNoFog()
+	if state.fullbright then return end -- Fullbright hält den Nebel selbst weg
+	if fogOrig.FogEnd then pcall(function() Lighting.FogEnd = fogOrig.FogEnd; Lighting.FogStart = fogOrig.FogStart end) end
+	for o, t in pairs(atmoOrig) do if o.Parent then o.Density = t.Density; o.Haze = t.Haze end end
+	fogOrig, atmoOrig = {}, {}
+end
+toggle(S_light, "Remove Fog", "nofog", function(on) if on then pcall(applyNoFog) else restoreNoFog() end end)
+task.spawn(function()
+	while H.alive do
+		if state.nofog then pcall(applyNoFog) end
+		task.wait(0.5)
+	end
+end)
+
+-- ================= COMBAT / AIMBOT =================
+-- Hook-frei, keine Remotes: Maus-Modus = mousemoverel (echter Input), Kamera-Modus = Camera.CFrame nach dem
+-- Kamera-Update (BindToRenderStep Camera+1). Zielwahl: nächster Spieler zum FOV-Mittelpunkt (Bildschirm).
+state.aim = sv("aim", false); state.aimTeam = sv("aimTeam", true); state.aimVis = sv("aimVis", true)
+state.aimHealth = sv("aimHealth", true); state.aimSticky = sv("aimSticky", true); state.aimDist = sv("aimDist", 600)
+state.aimSens = sv("aimSens", 2); state.aimPart = sv("aimPart", 1); state.aimType = sv("aimType", 1)
+state.aimRage = sv("aimRage", false); state.aimRageType = sv("aimRageType", 1)
+state.aimPred = sv("aimPred", false); state.aimPredX = sv("aimPredX", 5); state.aimPredY = sv("aimPredY", 5)
+state.aimSmooth = sv("aimSmooth", true); state.aimSmX = sv("aimSmX", 7.5); state.aimSmY = sv("aimSmY", 7.5)
+state.fov = sv("fov", true); state.fovGlow = sv("fovGlow", false); state.fovFill = sv("fovFill", false)
+state.fovSize = sv("fovSize", 126); state.fovStyle = sv("fovStyle", 1); state.fovColor = sv("fovColor", 1)
+
+local FOV_COLORS = { Color3.fromRGB(0, 255, 255), Color3.fromRGB(210, 80, 170), Color3.fromRGB(255, 255, 255),
+	Color3.fromRGB(255, 70, 70), Color3.fromRGB(90, 255, 120), Color3.fromRGB(255, 210, 60) }
+local HIT_PARTS = { "Head", "Torso", "Closest" }
+
+local sub = subtabs(comPage, { "Aimbot", "Prediction", "Smoothness", "FOV" })
+local S_aim = section(sub.Aimbot[1], "Aimbot")
+local S_aimT = section(sub.Aimbot[2], "Targeting")
+local S_pred = section(sub.Prediction[1], "Prediction")
+local S_smooth = section(sub.Smoothness[1], "Smoothness")
+local S_fov = section(sub.FOV[1], "FOV Circle")
+
+toggle(S_aim, "Enabled", "aim", function() end, "aim")
+toggle(S_aim, "Team Check", "aimTeam", function() end)
+toggle(S_aim, "Visible Check", "aimVis", function() end)
+toggle(S_aim, "Health Check", "aimHealth", function() end)
+toggle(S_aim, "Sticky Aim", "aimSticky", function() end)
+slider(S_aim, "Distance", 25, 3000, state.aimDist, function(v) state.aimDist = math.floor(v); return tostring(state.aimDist) end, "aimDist")
+slider(S_aim, "Sensitivity", 0.1, 5, state.aimSens, function(v)
+	state.aimSens = math.floor(v * 20 + 0.5) / 20; return ("%.2f"):format(state.aimSens) end, "aimSens")
+dropdown(S_aimT, "Hit Part", HIT_PARTS, state.aimPart, function(i) state.aimPart = i end, "aimPart")
+dropdown(S_aimT, "Aim Type", { "Mouse", "Camera" }, state.aimType, function(i) state.aimType = i end, "aimType")
+toggle(S_aimT, "Rage Method", "aimRage", function() end)
+dropdown(S_aimT, "Type", { "Camera Teleport", "Mouse Flick" }, state.aimRageType, function(i) state.aimRageType = i end, "aimRageType")
+local aimStatus = info(S_aimT, "Target: -")
+info(S_aimT, "Hold the aim key. Rage = instant snap, ignores FOV + visible check.")
+
+toggle(S_pred, "Enabled", "aimPred", function() end)
+slider(S_pred, "Prediction X", 0, 20, state.aimPredX, function(v)
+	state.aimPredX = math.floor(v * 4 + 0.5) / 4; return ("%.2f"):format(state.aimPredX) end, "aimPredX")
+slider(S_pred, "Prediction Y", 0, 20, state.aimPredY, function(v)
+	state.aimPredY = math.floor(v * 4 + 0.5) / 4; return ("%.2f"):format(state.aimPredY) end, "aimPredY")
+info(S_pred, "Lead = target velocity × value/100 s (X = horizontal, Y = vertical).")
+
+toggle(S_smooth, "Enabled", "aimSmooth", function() end)
+slider(S_smooth, "Smoothness X", 1, 20, state.aimSmX, function(v)
+	state.aimSmX = math.floor(v * 2 + 0.5) / 2; return ("%.1f"):format(state.aimSmX) end, "aimSmX")
+slider(S_smooth, "Smoothness Y", 1, 20, state.aimSmY, function(v)
+	state.aimSmY = math.floor(v * 2 + 0.5) / 2; return ("%.1f"):format(state.aimSmY) end, "aimSmY")
+
+-- FOV-Kreis (reine GUI, liegt im Hub-ScreenGui mit IgnoreGuiInset -> Koordinaten = Viewport/Maus)
+local fovRing = Instance.new("Frame")
+fovRing.AnchorPoint = Vector2.new(0.5, 0.5); fovRing.BackgroundTransparency = 1; fovRing.Visible = false; fovRing.Parent = gui
+Instance.new("UICorner", fovRing).CornerRadius = UDim.new(1, 0)
+local fovStroke = Instance.new("UIStroke", fovRing); fovStroke.Thickness = 1.5
+local fovGlowF = Instance.new("Frame")
+fovGlowF.AnchorPoint = Vector2.new(0.5, 0.5); fovGlowF.Position = UDim2.fromScale(0.5, 0.5); fovGlowF.Size = UDim2.new(1, 6, 1, 6)
+fovGlowF.BackgroundTransparency = 1; fovGlowF.Parent = fovRing
+Instance.new("UICorner", fovGlowF).CornerRadius = UDim.new(1, 0)
+local fovGlowS = Instance.new("UIStroke", fovGlowF); fovGlowS.Thickness = 5; fovGlowS.Transparency = 0.75
+
+local _, fovRow = toggle(S_fov, "Enabled", "fov", function() end)
+do -- Farbfeld rechts in der Zeile: Klick = nächste Farbe
+	local sw = Instance.new("TextButton")
+	sw.Size = UDim2.fromOffset(17, 17); sw.AnchorPoint = Vector2.new(1, 0); sw.Position = UDim2.new(1, 0, 0, 0)
+	sw.Text = ""; sw.AutoButtonColor = false; sw.BackgroundColor3 = FOV_COLORS[state.fovColor] or FOV_COLORS[1]; sw.Parent = fovRow
+	corner(sw, 4); stroke(sw, T.edge)
+	con(sw.MouseButton1Click, function()
+		state.fovColor = state.fovColor % #FOV_COLORS + 1; sw.BackgroundColor3 = FOV_COLORS[state.fovColor]
+	end)
+end
+toggle(S_fov, "Glow", "fovGlow", function() end)
+toggle(S_fov, "Filled", "fovFill", function() end)
+slider(S_fov, "Size", 10, 600, state.fovSize, function(v) state.fovSize = math.floor(v); return tostring(state.fovSize) end, "fovSize")
+dropdown(S_fov, "Style", { "Smooth", "Static", "Center" }, state.fovStyle, function(i) state.fovStyle = i end, "fovStyle")
+info(S_fov, "Smooth = follows the mouse softly, Static = sits on the mouse, Center = screen center.")
+
+local aimParams = RaycastParams.new(); aimParams.FilterType = Enum.RaycastFilterType.Exclude
+local aimTarget, fovPos = nil, nil
+local hasRel = typeof(mousemoverel) == "function"
+
+local function aimPartOf(c, origin)
+	local head = c:FindFirstChild("Head")
+	local torso = c:FindFirstChild("UpperTorso") or c:FindFirstChild("Torso") or c:FindFirstChild("HumanoidRootPart")
+	if state.aimPart == 1 then return head or torso end
+	if state.aimPart == 2 then return torso or head end
+	local best, bd = nil, math.huge -- Closest: der Teil, der dem FOV-Mittelpunkt am nächsten ist
+	for _, part in ipairs({ head, torso }) do
+		if part then
+			local sp, on = cam:WorldToViewportPoint(part.Position)
+			if on then
+				local d = (Vector2.new(sp.X, sp.Y) - origin).Magnitude
+				if d < bd then best, bd = part, d end
+			end
+		end
+	end
+	return best or head or torso
+end
+
+-- nil wenn Spieler kein gültiges Ziel ist, sonst Teil + Bildschirmabstand
+local function aimCheck(p, origin, ignoreFov)
+	if p == lp then return end
+	local c = p.Character; if not c or not c.Parent then return end
+	local hum = c:FindFirstChildOfClass("Humanoid"); if not hum then return end
+	if state.aimTeam and p.Team ~= nil and p.Team == lp.Team then return end
+	if state.aimHealth and (hum.Health <= 0 or c:GetAttribute("Down")) then return end
+	local part = aimPartOf(c, origin); if not part then return end
+	local camPos = cam.CFrame.Position
+	if (part.Position - camPos).Magnitude > state.aimDist then return end
+	local sp, on = cam:WorldToViewportPoint(part.Position)
+	if not on or sp.Z <= 0 then return end
+	local sd = (Vector2.new(sp.X, sp.Y) - origin).Magnitude
+	local rage = state.aimRage
+	if state.fov and not rage and not ignoreFov and sd > state.fovSize then return end
+	if state.aimVis and not rage then
+		aimParams.FilterDescendantsInstances = { lp.Character, cam }
+		local hit = workspace:Raycast(camPos, part.Position - camPos, aimParams)
+		if hit and not hit.Instance:IsDescendantOf(c) then return end
+	end
+	return part, sd
+end
+
+RunService:BindToRenderStep("TSC_AIM", Enum.RenderPriority.Camera.Value + 1, function(dt)
+	local mouse = UIS:GetMouseLocation()
+	-- FOV-Mittelpunkt
+	local want = (state.fovStyle == 3) and (cam.ViewportSize / 2) or mouse
+	if state.fovStyle == 1 and fovPos then fovPos = fovPos:Lerp(want, math.clamp(dt * 18, 0, 1)) else fovPos = want end
+	local r = state.fovSize
+	if state.fov then
+		local col = FOV_COLORS[state.fovColor] or FOV_COLORS[1]
+		fovRing.Position = UDim2.fromOffset(fovPos.X, fovPos.Y); fovRing.Size = UDim2.fromOffset(r * 2, r * 2)
+		fovStroke.Color = col; fovGlowS.Color = col; fovGlowS.Enabled = state.fovGlow
+		fovRing.BackgroundColor3 = col; fovRing.BackgroundTransparency = state.fovFill and 0.88 or 1
+		fovRing.Visible = true
+	else
+		fovRing.Visible = false
+	end
+
+	if not state.aim or not keyHeld(state.keys.aim) then aimTarget = nil; return end
+	-- Ziel wählen (Sticky: altes Ziel behalten, solange es gültig bleibt – FOV egal)
+	local part
+	if state.aimSticky and aimTarget then part = aimCheck(aimTarget, fovPos, true) end
+	if not part then
+		aimTarget = nil
+		local bd = math.huge
+		for _, p in ipairs(Players:GetPlayers()) do
+			local pt, sd = aimCheck(p, fovPos, false)
+			if pt and sd < bd then bd, aimTarget, part = sd, p, pt end
+		end
+	end
+	if not part then return end
+
+	local pos = part.Position
+	if state.aimPred then
+		local v = part.AssemblyLinearVelocity
+		pos = pos + Vector3.new(v.X * state.aimPredX, v.Y * state.aimPredY, v.Z * state.aimPredX) / 100
+	end
+	local camCF = cam.CFrame
+	local sp = cam:WorldToViewportPoint(pos)
+	local delta = Vector2.new(sp.X, sp.Y) - mouse
+
+	if state.aimRage then
+		if state.aimRageType == 1 then cam.CFrame = CFrame.lookAt(camCF.Position, pos)
+		elseif hasRel and focused() then mousemoverel(delta.X, delta.Y) end
+		return
+	end
+	local sx = state.aimSmooth and state.aimSmX or 1
+	local sy = state.aimSmooth and state.aimSmY or 1
+	local k = state.aimSens / 2
+	if state.aimType == 1 then
+		if hasRel and focused() then
+			local mx, my = delta.X * k / sx, delta.Y * k / sy
+			-- nie über das Ziel hinausschießen
+			if math.abs(mx) > math.abs(delta.X) then mx = delta.X end
+			if math.abs(my) > math.abs(delta.Y) then my = delta.Y end
+			mousemoverel(mx, my)
+		end
+	else
+		local goal = CFrame.lookAt(camCF.Position, pos)
+		local a = math.clamp(k / ((sx + sy) / 2), 0, 1)
+		cam.CFrame = camCF:Lerp(goal, a)
+	end
+end)
+table.insert(H.conns, { Disconnect = function() RunService:UnbindFromRenderStep("TSC_AIM") end })
+
+task.spawn(function()
+	while H.alive do
+		if not state.aim then aimStatus.Text = "Target: - (off)"
+		elseif aimTarget then
+			local c = aimTarget.Character; local rt = c and c:FindFirstChild("HumanoidRootPart")
+			local d = rt and math.floor((rt.Position - cam.CFrame.Position).Magnitude) or 0
+			aimStatus.Text = ('Target: <font color="#d266b4">%s</font> · %dm'):format(aimTarget.Name, d)
+		else aimStatus.Text = "Target: - (hold " .. keyName(state.keys.aim) .. ")" end
+		task.wait(0.2)
+	end
+end)
 
 -- ================= ESP =================
 local espObjs = {} -- [player] = {bb=, lbl=}
@@ -713,7 +1003,7 @@ task.spawn(function()
 		if not state.turrets then
 			turretInfo.Text = "Turrets: " .. (f and (#f:GetChildren() .. " in folder") or "folder not loaded")
 		else
-			turretInfo.Text = ('Turrets: <font color="#f5a8de">%d deleted</font>%s'):format(turretKilled, f and "" or " · folder not loaded")
+			turretInfo.Text = ('Turrets: <font color="#d266b4">%d deleted</font>%s'):format(turretKilled, f and "" or " · folder not loaded")
 		end
 		task.wait(1)
 	end
@@ -1067,9 +1357,9 @@ task.spawn(function()
 			end
 		end
 		if state.staff and n > 0 then
-			staffPanel.Text = ('<font color="#f5a8de">STAFF IM SERVER: %d</font>\n'):format(n) .. table.concat(lines, "\n")
+			staffPanel.Text = ('<font color="#d266b4">STAFF IM SERVER: %d</font>\n'):format(n) .. table.concat(lines, "\n")
 			staffPanel.Visible = true
-			staffSummary.Text = ('<font color="#f5a8de">%d staff in server</font>'):format(n)
+			staffSummary.Text = ('<font color="#d266b4">%d staff in server</font>'):format(n)
 		else
 			staffPanel.Visible = false
 			staffSummary.Text = state.staff and "No staff detected." or "off"
@@ -2573,11 +2863,11 @@ task.spawn(function() while H.alive do pcall(rebuildPkg) task.wait(1) end end)
 state.collapsed = sv("collapsed", false)
 local FULL_H = main.Size.Y.Offset
 local colBtn = Instance.new("TextButton")
-colBtn.Size = UDim2.fromOffset(22, 22); colBtn.AnchorPoint = Vector2.new(1, 0); colBtn.Position = UDim2.new(1, -6, 0, 2)
-colBtn.BackgroundTransparency = 1; colBtn.Font = T.font; colBtn.TextSize = 16; colBtn.TextColor3 = T.dim; colBtn.Parent = titleBar
+colBtn.Size = UDim2.fromOffset(22, 22); colBtn.AnchorPoint = Vector2.new(1, 0); colBtn.Position = UDim2.new(1, -8, 0, 4)
+colBtn.BackgroundTransparency = 1; colBtn.Font = T.font; colBtn.TextSize = 16; colBtn.TextColor3 = T.dim; colBtn.ZIndex = 3; colBtn.Parent = main
 local function applyCollapse()
 	tabBar.Visible = not state.collapsed; content.Visible = not state.collapsed
-	main.Size = UDim2.fromOffset(main.Size.X.Offset, state.collapsed and 26 or FULL_H)
+	main.Size = UDim2.fromOffset(main.Size.X.Offset, state.collapsed and 30 or FULL_H)
 	colBtn.Text = state.collapsed and "+" or "–"
 end
 applyCollapse()
@@ -2590,14 +2880,17 @@ con(colBtn.MouseLeave, function() colBtn.TextColor3 = T.dim end)
 local CFG_FILE = "tsc_hub_config.json"
 local DEFAULTS = { fullbright = false, esp = false, espDist = 1500, espFade = 40, espFadePow = 2, brightness = 2, items = false, perf = 1,
 	updInt = 0.2, nofall = false, staff = true, vent = true, ventPred = true, ventLog = true, ventBias = 0,
-	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0, turrets = false }
+	ms = true, msReader = true, msHints = true, msFlags = true, msPace = 0, turrets = false, nofog = false,
+	aim = false, aimTeam = true, aimVis = true, aimHealth = true, aimSticky = true, aimDist = 600, aimSens = 2, aimPart = 1, aimType = 1,
+	aimRage = false, aimRageType = 1, aimPred = false, aimPredX = 5, aimPredY = 5, aimSmooth = true, aimSmX = 7.5, aimSmY = 7.5,
+	fov = true, fovGlow = false, fovFill = false, fovSize = 126, fovStyle = 1 }
 local cfgStatus
 local function saveCfg()
 	local data = { keys = {} }
 	for id, c in pairs(ctl) do data[id] = c.get() end
 	for id, k in pairs(state.keys) do data.keys[id] = k.Name end
 	local ok, err = pcall(function() writefile(CFG_FILE, HttpService:JSONEncode(data)) end)
-	cfgStatus.Text = ok and ('<font color="#f5a8de">profile saved</font> ' .. os.date("%H:%M:%S")) or ("save failed: " .. tostring(err))
+	cfgStatus.Text = ok and ('<font color="#d266b4">profile saved</font> ' .. os.date("%H:%M:%S")) or ("save failed: " .. tostring(err))
 end
 local function applyCfg(data)
 	for id, v in pairs(data) do
@@ -2612,14 +2905,14 @@ local function loadCfg()
 	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CFG_FILE)) end)
 	if not ok or type(data) ~= "table" then cfgStatus.Text = "no profile found"; return end
 	applyCfg(data)
-	cfgStatus.Text = '<font color="#f5a8de">profile loaded</font> ' .. os.date("%H:%M:%S")
+	cfgStatus.Text = '<font color="#d266b4">profile loaded</font> ' .. os.date("%H:%M:%S")
 end
 button(S_cfg, "Save Profile", saveCfg)
 button(S_cfg, "Load Profile", loadCfg)
 button(S_cfg, "Reset To Defaults", function()
-	applyCfg({ keys = { menu = "RightShift", vent = "End" } })
+	applyCfg({ keys = { menu = "RightShift", vent = "End", aim = "MouseButton2" } })
 	for id, v in pairs(DEFAULTS) do if ctl[id] then pcall(ctl[id].set, v) end end
-	cfgStatus.Text = '<font color="#f5a8de">defaults restored</font>'
+	cfgStatus.Text = '<font color="#d266b4">defaults restored</font>'
 end)
 cfgStatus = info(S_cfg, "Settings save automatically.\nProfile: workspace/" .. CFG_FILE)
 
@@ -2630,16 +2923,19 @@ info(S_menu, "Click a key box, then press a key (Esc = cancel).")
 
 con(UIS.InputBegan, function(i, gp)
 	if listening then
-		if i.UserInputType == Enum.UserInputType.Keyboard then
+		local isKey = i.UserInputType == Enum.UserInputType.Keyboard
+		local isMouse = i.UserInputType == Enum.UserInputType.MouseButton2 or i.UserInputType == Enum.UserInputType.MouseButton3
+		if isKey or isMouse then
 			local id = listening; listening = nil
-			if i.KeyCode ~= Enum.KeyCode.Escape then state.keys[id] = i.KeyCode end
-			local b = keyBoxes[id]; b.Text = keyName(state.keys[id]); b.TextColor3 = T.dim
+			if isMouse then state.keys[id] = i.UserInputType
+			elseif i.KeyCode ~= Enum.KeyCode.Escape then state.keys[id] = i.KeyCode end
+			local b = keyBoxes[id]; b.Text = keyName(state.keys[id]); b.TextColor3 = T.text
 		end
 		return
 	end
 	if gp or i.UserInputType ~= Enum.UserInputType.Keyboard then return end
-	if i.KeyCode == state.keys.menu then main.Visible = not main.Visible
-	elseif i.KeyCode == state.keys.vent then state.vent = not state.vent; refresh.vent() end
+	if keyMatch(i, state.keys.menu) then main.Visible = not main.Visible
+	elseif keyMatch(i, state.keys.vent) then state.vent = not state.vent; refresh.vent() end
 end)
 
 selectTab("Misc")
@@ -2651,7 +2947,7 @@ task.spawn(function()
 	while H.alive do
 		local t = {}
 		for _, k in ipairs(SAVE_KEYS) do t[k] = state[k] end
-		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name
+		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name
 		t.guiX = main.Position.X.Offset; t.guiY = main.Position.Y.Offset; t.guiVisible = main.Visible
 		local ok, js = pcall(function() return HttpService:JSONEncode(t) end)
 		if ok and js ~= last then
