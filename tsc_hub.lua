@@ -35,7 +35,7 @@ local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDow
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
-	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" }
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -2950,6 +2950,134 @@ applyCollapse()
 con(colBtn.MouseButton1Click, function() state.collapsed = not state.collapsed; applyCollapse() end)
 con(colBtn.MouseEnter, function() colBtn.TextColor3 = T.accent end)
 con(colBtn.MouseLeave, function() colBtn.TextColor3 = T.dim end)
+
+-- ================= ALARM-ZONEN =================
+-- Alarme = unsichtbare Touch-Boxen "TeamDetect" (Server-Script TeamDetector + Alarm-Sound) in LaserGates,
+-- TeslaGates, TeamSensors (Motion Sensor), MaxiBurgerSystems, *Detect. Box statt Radius -> exakte Box zeichnen.
+-- StreamingEnabled: Zonen existieren nur in der Nähe -> jede gesehene Zone wird gelernt (tsc_alarms.json)
+-- und an Weltkoordinaten gezeichnet (Adornee = Terrain), also auch wenn sie gerade rausgestreamt ist.
+local S_alarm = section(visL, "Alarm Zones")
+state.alarms = sv("alarms", false)
+state.alarmDist = sv("alarmDist", 600)
+local ALARM_FILE = "tsc_alarms.json"
+local ALARM_COL = {
+	LaserGates = Color3.fromRGB(255, 150, 40), TeslaGates = Color3.fromRGB(170, 90, 255),
+	TeamSensors = Color3.fromRGB(255, 60, 60), MaxiBurgerSystems = Color3.fromRGB(255, 220, 60),
+}
+local alarmDB = {} -- [key] = {cf={12 Zahlen}, size={x,y,z}, name=, kind=}
+pcall(function() if isfile(ALARM_FILE) then alarmDB = HttpService:JSONDecode(readfile(ALARM_FILE)) end end)
+if type(alarmDB) ~= "table" then alarmDB = {} end
+local alarmDirty = false
+local function alarmKind(part) return part:GetFullName():match("^Workspace%.([^%.]+)") or "?" end
+local function alarmName(part, kind)
+	local m = part.Parent
+	local mn = m and m:FindFirstChild("MotionName")
+	if mn and mn.Value ~= "" then return mn.Value end
+	if kind == "TeamSensors" then return "Motion Sensor" end
+	if kind == "LaserGates" then return "Laser Gate" end
+	if kind == "TeslaGates" then return "Tesla Gate" end
+	if kind == "MaxiBurgerSystems" then return "MaxiBurger" end
+	return (m and m.Name ~= "Model" and m.Name) or kind
+end
+local function alarmLearn(part)
+	local p = part.Position
+	local key = ("%d_%d_%d"):format(math.floor(p.X + 0.5), math.floor(p.Y + 0.5), math.floor(p.Z + 0.5))
+	if alarmDB[key] then return end
+	local kind = alarmKind(part)
+	alarmDB[key] = { cf = { part.CFrame:GetComponents() }, size = { part.Size.X, part.Size.Y, part.Size.Z },
+		name = alarmName(part, kind), kind = kind }
+	alarmDirty = true
+end
+local alarmFolders = {}
+local function isAlarmFolder(n)
+	return n:find("Detect") or n:find("Sensor") or n == "LaserGates" or n == "TeslaGates" or n == "MaxiBurgerSystems"
+end
+local function hookAlarmFolder(f)
+	if alarmFolders[f] then return end
+	alarmFolders[f] = true
+	for _, d in ipairs(f:GetDescendants()) do if d:IsA("BasePart") and d.Name == "TeamDetect" then alarmLearn(d) end end
+	con(f.DescendantAdded, function(d)
+		if d:IsA("BasePart") and d.Name == "TeamDetect" then task.defer(alarmLearn, d) end
+	end)
+end
+for _, f in ipairs(workspace:GetChildren()) do if isAlarmFolder(f.Name) then hookAlarmFolder(f) end end
+con(workspace.ChildAdded, function(c) if isAlarmFolder(c.Name) then hookAlarmFolder(c) end end)
+
+local alarmObjs = {} -- [key] = {box=, wire=, bb=, lbl=}
+local function clearAlarm(key)
+	local o = alarmObjs[key]
+	if o then for _, x in pairs(o) do pcall(function() x:Destroy() end) end alarmObjs[key] = nil end
+end
+local function ensureAlarm(key, z)
+	if alarmObjs[key] then return alarmObjs[key] end
+	local col = ALARM_COL[z.kind] or Color3.fromRGB(255, 90, 90)
+	local cf, size = CFrame.new(table.unpack(z.cf)), Vector3.new(z.size[1], z.size[2], z.size[3])
+	local ter = workspace.Terrain
+	local box = Instance.new("BoxHandleAdornment")
+	box.Adornee = ter; box.CFrame = cf; box.Size = size; box.AlwaysOnTop = true; box.ZIndex = 1
+	box.Color3 = col; box.Transparency = 0.82; box.Parent = gui
+	local wire = Instance.new("WireframeHandleAdornment")
+	wire.Adornee = ter; wire.CFrame = cf; wire.AlwaysOnTop = true; wire.ZIndex = 2; wire.Color3 = col; wire.Thickness = 2
+	local h = size / 2
+	local c = {}
+	for _, sx in ipairs({ -1, 1 }) do for _, sy in ipairs({ -1, 1 }) do for _, sz in ipairs({ -1, 1 }) do
+		c[#c + 1] = Vector3.new(sx * h.X, sy * h.Y, sz * h.Z)
+	end end end
+	for i = 1, 8 do for j = i + 1, 8 do
+		local d = c[i] - c[j]
+		local nz = (d.X ~= 0 and 1 or 0) + (d.Y ~= 0 and 1 or 0) + (d.Z ~= 0 and 1 or 0)
+		if nz == 1 then wire:AddLine(c[i], c[j]) end
+	end end
+	wire.Parent = gui
+	local bb = Instance.new("BillboardGui")
+	bb.Adornee = ter; bb.StudsOffsetWorldSpace = cf.Position + Vector3.new(0, size.Y / 2 + 1, 0)
+	bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(220, 30); bb.LightInfluence = 0; bb.Parent = gui
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.fromScale(1, 1); lbl.BackgroundTransparency = 1; lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 12
+	lbl.TextColor3 = col; lbl.TextStrokeTransparency = 0.3; lbl.Parent = bb
+	local o = { box = box, wire = wire, bb = bb, lbl = lbl, cf = cf, size = size }
+	alarmObjs[key] = o
+	return o
+end
+
+toggle(S_alarm, "Show Alarm Zones", "alarms", function(on) if not on then for k in pairs(alarmObjs) do clearAlarm(k) end end end)
+slider(S_alarm, "Max Distance", 50, 3000, state.alarmDist, function(v)
+	state.alarmDist = math.floor(v)
+	return state.alarmDist .. "m"
+end, "alarmDist")
+local alarmInfo = info(S_alarm, "")
+info(S_alarm, '<font color="#ff3c3c">Motion</font> · <font color="#ff9628">Laser</font> · <font color="#aa5aff">Tesla</font> · <font color="#ffdc3c">MaxiBurger</font> – box = exact trigger volume. Zones are learned when loaded once (workspace/' .. ALARM_FILE .. ').')
+task.spawn(function()
+	while H.alive do
+		if alarmDirty then alarmDirty = false; pcall(writefile, ALARM_FILE, HttpService:JSONEncode(alarmDB)) end
+		if state.alarms then
+			local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+			local myPos = myRoot and myRoot.Position or cam.CFrame.Position
+			local total, shown, near, nearD, insideAny = 0, 0, nil, math.huge, nil
+			for key, z in pairs(alarmDB) do
+				total = total + 1
+				local pos = Vector3.new(z.cf[1], z.cf[2], z.cf[3])
+				local dist = (pos - myPos).Magnitude
+				if dist <= state.alarmDist then
+					local o = ensureAlarm(key, z)
+					local lpnt = o.cf:PointToObjectSpace(myPos)
+					local inside = math.abs(lpnt.X) <= o.size.X / 2 and math.abs(lpnt.Y) <= o.size.Y / 2 and math.abs(lpnt.Z) <= o.size.Z / 2
+					o.box.Transparency = inside and 0.55 or 0.82
+					o.lbl.Text = z.name .. "  " .. math.floor(dist) .. "m" .. (inside and "  [INSIDE]" or "")
+					shown = shown + 1
+					if inside then insideAny = z.name end
+					if dist < nearD then nearD = dist; near = z.name end
+				else
+					clearAlarm(key)
+				end
+			end
+			alarmInfo.Text = ("%d/%d known zones shown%s%s"):format(shown, total,
+				near and (" · nearest: " .. near .. " " .. math.floor(nearD) .. "m") or "",
+				insideAny and ('\n<font color="#ff3c3c">INSIDE: ' .. insideAny .. "</font>") or "")
+		end
+		task.wait(math.max(0.5, state.updInt or 0.5))
+	end
+end)
 
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
