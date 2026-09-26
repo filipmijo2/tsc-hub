@@ -35,7 +35,7 @@ local function keyHeld(k) if k.EnumType == Enum.KeyCode then return UIS:IsKeyDow
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
 	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed", "desyncDepth", "nofog",
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
-	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" }
+	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -3008,9 +3008,18 @@ local function alarmDisarm(d)
 		d.CanTouch = d:GetAttribute("TSC_OrigCanTouch"); d:SetAttribute("TSC_OrigCanTouch", nil)
 	end
 end
+-- Wie Turrets: Trigger-Box lokal löschen (auch neu reingestreamte). Box-Anzeige bleibt (gelernte Position).
+-- Nicht reversibel bis Re-Stream/Rejoin.
+state.alarmDel = sv("alarmDel", false)
+local alarmDeleted = 0
 local function alarmSeen(d)
-	alarmLive[d] = true
 	alarmLearn(d)
+	if state.alarmDel then
+		pcall(function() d:Destroy() end)
+		alarmDeleted = alarmDeleted + 1
+		return
+	end
+	alarmLive[d] = true
 	pcall(alarmDisarm, d)
 end
 local function hookAlarmFolder(f)
@@ -3066,6 +3075,20 @@ slider(S_alarm, "Max Distance", 50, 3000, state.alarmDist, function(v)
 	state.alarmDist = math.floor(v)
 	return state.alarmDist .. "m"
 end, "alarmDist")
+toggle(S_alarm, "Delete Alarms (local)", "alarmDel", function(on)
+	if not on then return end
+	for d in pairs(alarmLive) do
+		if d.Parent then pcall(function() d:Destroy() end) alarmDeleted = alarmDeleted + 1 end
+		alarmLive[d] = nil
+	end
+	for f in pairs(alarmFolders) do
+		if f.Parent then
+			for _, d in ipairs(f:GetDescendants()) do
+				if d:IsA("BasePart") and d.Name == "TeamDetect" then pcall(function() d:Destroy() end) alarmDeleted = alarmDeleted + 1 end
+			end
+		end
+	end
+end)
 toggle(S_alarm, "Disable Triggers (local)", "alarmOff", function()
 	for d in pairs(alarmLive) do if d.Parent then pcall(alarmDisarm, d) else alarmLive[d] = nil end end
 end)
@@ -3105,7 +3128,8 @@ task.spawn(function()
 			alarmInfo.Text = ("%d/%d known zones shown%s%s%s%s"):format(shown, total,
 				near and (" · nearest: " .. near .. " " .. math.floor(nearD) .. "m") or "",
 				insideAny and ('\n<font color="#ff3c3c">INSIDE: ' .. insideAny .. "</font>") or "",
-				state.alarmOff and '\n<font color="#78ff8c">triggers disarmed (local)</font>' or "",
+				(state.alarmOff and '\n<font color="#78ff8c">triggers disarmed (local)</font>' or "")
+					.. (state.alarmDel and ('\n<font color="#78ff8c">alarms deleted: ' .. alarmDeleted .. "</font>") or ""),
 				#playing > 0 and ('\n<font color="#ff3c3c">ALARM SOUNDING: ' .. table.concat(playing, ", ") .. "</font>") or "")
 		end
 		task.wait(math.max(0.5, state.updInt or 0.5))
