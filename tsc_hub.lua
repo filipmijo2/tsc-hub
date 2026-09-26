@@ -1237,7 +1237,8 @@ do
 		pcall(function() actor:SetAttribute("TSC_NSGen", gen) end)
 		setFlag()
 		pcall(run_on_actor, actor, [==[
-			local actor = script and script:FindFirstAncestorOfClass("Actor") or game:GetService("Players").LocalPlayer.PlayerScripts:FindFirstChild("FrameworkActor")
+			-- (script ist in Potassiums Actor-Env eine Tabelle, keine Instance -> Actor über Pfad holen)
+			local actor = game:GetService("Players").LocalPlayer.PlayerScripts:FindFirstChild("FrameworkActor")
 			local myGen = actor:GetAttribute("TSC_NSGen")
 			local RS = game:GetService("RunService")
 			local tbl, lastScan = nil, 0
