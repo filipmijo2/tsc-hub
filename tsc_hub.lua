@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -480,6 +480,48 @@ slider(S_vent, "Lead Adjust (frames)", -2, 2, state.ventBias, function(v)
 	return ("%+.2f"):format(state.ventBias)
 end, "ventBias")
 toggle(S_vent, "Log To File", "ventLog", function() end)
+-- ================= FAKE VENT TOOL =================
+-- VentSystemL.getModifiers sucht VentTools per Name in Hand/Backpack (höchste Priority gewinnt) und nutzt dessen
+-- SpeedMultiplier fürs rein clientseitige Minigame. Lokales leeres Tool mit passendem Namen = Tool-Bonus.
+-- Nur während das Minigame offen ist im Backpack (kein Phantom-Slot). Server sieht das Tool nicht.
+state.ventFake = sv("ventFake", false)
+state.ventFakeIdx = sv("ventFakeIdx", 1)
+;(function()
+	local OPTS = { "Drill", "Sledge Hammer", "Crowbar" }
+	local fake = nil
+	local function removeFake() if fake then pcall(function() fake:Destroy() end) fake = nil end end
+	toggle(S_vent, "Fake Tool", "ventFake", function(on) if not on then removeFake() end end)
+	dropdown(S_vent, "Fake Tool Type", { "Drill (x20)", "Sledge Hammer (x5.5)", "Crowbar (x4)" }, state.ventFakeIdx, function(i)
+		state.ventFakeIdx = i; removeFake()
+	end, "ventFakeIdx")
+	task.spawn(function()
+		while H.alive do
+			local open = false
+			local pg = lp:FindFirstChild("PlayerGui")
+			local mg = pg and pg:FindFirstChild("VentMinigame")
+			local fr = mg and mg:FindFirstChild("Frame")
+			open = fr and fr.Visible or false
+			if state.ventFake and open then
+				local bp = lp:FindFirstChild("Backpack")
+				local name = OPTS[state.ventFakeIdx] or "Drill"
+				if bp and (not fake or fake.Parent ~= bp or fake.Name ~= name) then
+					removeFake()
+					if not bp:FindFirstChild(name) then
+						fake = Instance.new("Tool")
+						fake.Name = name; fake.RequiresHandle = false; fake.CanBeDropped = false
+						fake:SetAttribute("TSC_Fake", true)
+						fake.Parent = bp
+					end
+				end
+			elseif fake then
+				removeFake()
+			end
+			task.wait(0.1)
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() removeFake() end })
+end)()
+
 local ventStatus = info(S_vent, "Status: -")
 local ventLast = info(S_vent, "Last: -")
 if not hasMove then ventStatus.Text = '<font color="#ff6060">mousemoveabs fehlt</font>' end
