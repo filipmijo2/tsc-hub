@@ -25,7 +25,7 @@ if type(saved) ~= "table" then saved = {} end
 local function sv(k, def) if saved[k] ~= nil then return saved[k] end return def end
 local function kc(n, def) local ok, k = pcall(function() return Enum.KeyCode[n] end) return (ok and k) or def end
 local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "bright", "items", "perf", "updInt", "nofall", "staff", "markId", "markName",
-	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel" }
+	"vent", "ventPred", "ventLog", "ventBias", "ms", "msReader", "msHints", "msFlags", "msPace", "turrets", "pkgSel", "collapsed" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -2379,39 +2379,54 @@ end
 
 state.pkgSel = sv("pkgSel", nil)
 local pkgInfo = info(S_pkg, "No package selected", T.accent)
-local pkgList = Instance.new("ScrollingFrame")
-pkgList.Size = UDim2.new(1, 0, 0, 220); pkgList.BackgroundColor3 = T.bg; pkgList.BorderSizePixel = 0; pkgList.ScrollBarThickness = 2
-pkgList.ScrollBarImageColor3 = T.accent; pkgList.LayoutOrder = nextOrder(S_pkg)
-pkgList.AutomaticCanvasSize = Enum.AutomaticSize.Y; pkgList.CanvasSize = UDim2.new(); pkgList.Parent = S_pkg.f
-stroke(pkgList)
-local pkgLay = Instance.new("UIListLayout", pkgList); pkgLay.Padding = UDim.new(0, 1); pkgLay.SortOrder = Enum.SortOrder.LayoutOrder
+-- Ziel-Auswahl als Dropdown (Liste wird beim Aufklappen frisch gebaut)
 local lastPkgSig = ""
-button(S_pkg, "Clear Waypoint", function() state.pkgSel = nil; lastPkgSig = "" end)
+local pkgCur
+do
+	txt(S_pkg.f, "Target", UDim2.new(1, 0, 0, 14)).LayoutOrder = nextOrder(S_pkg)
+	local box = Instance.new("TextButton")
+	box.Size = UDim2.new(1, 0, 0, 18); box.BackgroundColor3 = T.track; box.BorderSizePixel = 0; box.AutoButtonColor = false
+	box.Text = ""; box.LayoutOrder = nextOrder(S_pkg); box.Parent = S_pkg.f
+	stroke(box); corner(box, 2)
+	pkgCur = txt(box, state.pkgSel or "none", UDim2.new(1, -24, 1, 0)); pkgCur.Position = UDim2.fromOffset(6, 0)
+	pkgCur.TextTruncate = Enum.TextTruncate.AtEnd
+	local arr = txt(box, "▼", UDim2.new(0, 14, 1, 0), T.text); arr.Position = UDim2.new(1, -16, 0, 0); arr.TextSize = 10
+	local list = Instance.new("Frame")
+	list.Size = UDim2.new(1, 0, 0, 0); list.AutomaticSize = Enum.AutomaticSize.Y; list.BackgroundColor3 = T.bg
+	list.BorderSizePixel = 0; list.Visible = false; list.LayoutOrder = nextOrder(S_pkg); list.Parent = S_pkg.f
+	stroke(list)
+	Instance.new("UIListLayout", list).SortOrder = Enum.SortOrder.LayoutOrder
+	local function close() list.Visible = false; arr.Text = "▼" end
+	local function fill()
+		for _, c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+		local cq = lp:FindFirstChild("CurrentQuest")
+		local mineObj = cq and cq.Value
+		local opts = { { label = "none" } }
+		for _, q in ipairs(ddQuests()) do
+			local _, kind = ddTarget(q.name)
+			local npcShort = q.npc:gsub("'s Dead Drops", "")
+			opts[#opts + 1] = { name = q.name, own = mineObj == q.obj, label = ("%s$%d %s [%s] r%d%s%s"):format(mineObj == q.obj and "> " or "",
+				q.pay, q.name, npcShort, q.risk, q.who and (" - " .. (q.who == lp and "you" or q.who.Name)) or "", kind == "ca." and " ~" or "") }
+		end
+		for i, o in ipairs(opts) do
+			local b = Instance.new("TextButton")
+			b.Size = UDim2.new(1, 0, 0, 17); b.BackgroundTransparency = 1; b.Font = T.font; b.TextSize = 12
+			b.Text = "  " .. o.label; b.TextXAlignment = Enum.TextXAlignment.Left; b.TextTruncate = Enum.TextTruncate.AtEnd
+			b.TextColor3 = o.own and Color3.fromRGB(120, 255, 140) or ((o.name == state.pkgSel) and T.accent or T.dim)
+			b.LayoutOrder = i; b.Parent = list
+			b.MouseButton1Click:Connect(function() state.pkgSel = o.name; close() end)
+		end
+	end
+	con(box.MouseButton1Click, function()
+		if list.Visible then close() else fill(); list.Visible = true; arr.Text = "▲" end
+	end)
+end
+button(S_pkg, "Clear Waypoint", function() state.pkgSel = nil end)
+info(S_pkg, "~ = approx. (region/camera); exact once the drop point streams in (saved to workspace/" .. DD_FILE .. ")")
 
 local function rebuildPkg()
-	local qs = ddQuests()
-	local cq = lp:FindFirstChild("CurrentQuest")
-	local mine = cq and cq.Value and cq.Value.Name
-	local mineObj = cq and cq.Value
-	local sig = (mine or "") .. "|" .. tostring(state.pkgSel)
-	for _, q in ipairs(qs) do sig = sig .. q.name .. q.npc .. q.pay .. tostring(q.who) end
-	if sig == lastPkgSig then return end
-	lastPkgSig = sig
-	for _, c in ipairs(pkgList:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
-	for i, q in ipairs(qs) do
-		local _, kind = ddTarget(q.name)
-		local sel, own = state.pkgSel == q.name, mineObj == q.obj
-		local b = Instance.new("TextButton")
-		b.LayoutOrder = i; b.Size = UDim2.new(1, -4, 0, 30); b.BorderSizePixel = 0; b.AutoButtonColor = false
-		b.BackgroundColor3 = sel and Color3.fromRGB(70, 38, 60) or T.bg; b.BackgroundTransparency = sel and 0 or 1
-		b.Font = T.font; b.TextSize = 12; b.TextXAlignment = Enum.TextXAlignment.Left; b.TextTruncate = Enum.TextTruncate.AtEnd
-		b.TextColor3 = own and Color3.fromRGB(120, 255, 140) or (sel and T.accent or T.text)
-		local npcShort = q.npc:gsub("'s Dead Drops", "")
-		b.Text = (" %s%s  [%s]\n $%d · risk %d · %s · %s"):format(own and "> " or "", q.name, npcShort,
-			q.pay, q.risk, q.who and ("taken: " .. q.who.Name) or "free", kind)
-		b.Parent = pkgList
-		b.MouseButton1Click:Connect(function() state.pkgSel = (state.pkgSel == q.name) and nil or q.name; lastPkgSig = "" end)
-	end
+	local sel = state.pkgSel or "none"
+	if pkgCur.Text ~= sel then pkgCur.Text = sel end
 end
 
 -- Wegpunkt-Overlay (2D-Projektion)
@@ -2469,6 +2484,22 @@ con(RunService.RenderStepped, function()
 	end
 end)
 task.spawn(function() while H.alive do pcall(rebuildPkg) task.wait(1) end end)
+
+-- ================= EINKLAPPEN =================
+state.collapsed = sv("collapsed", false)
+local FULL_H = main.Size.Y.Offset
+local colBtn = Instance.new("TextButton")
+colBtn.Size = UDim2.fromOffset(22, 22); colBtn.AnchorPoint = Vector2.new(1, 0); colBtn.Position = UDim2.new(1, -6, 0, 2)
+colBtn.BackgroundTransparency = 1; colBtn.Font = T.font; colBtn.TextSize = 16; colBtn.TextColor3 = T.dim; colBtn.Parent = titleBar
+local function applyCollapse()
+	tabBar.Visible = not state.collapsed; content.Visible = not state.collapsed
+	main.Size = UDim2.fromOffset(main.Size.X.Offset, state.collapsed and 26 or FULL_H)
+	colBtn.Text = state.collapsed and "+" or "–"
+end
+applyCollapse()
+con(colBtn.MouseButton1Click, function() state.collapsed = not state.collapsed; applyCollapse() end)
+con(colBtn.MouseEnter, function() colBtn.TextColor3 = T.accent end)
+con(colBtn.MouseLeave, function() colBtn.TextColor3 = T.dim end)
 
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
