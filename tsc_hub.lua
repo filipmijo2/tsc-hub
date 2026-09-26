@@ -3112,6 +3112,41 @@ task.spawn(function()
 	end
 end)
 
+-- ================= TEAM SWITCH =================
+-- Gleicher Aufruf wie das Deploy-Menü: TeamChanger:InvokeServer("SwitchTeam", team). Server prüft Rechte selbst
+-- (Gruppe/Spielzeit) -> nur Teams, die man eh hat. Civilian (2h Spielzeit) + Test Subject (frei).
+local S_team = section(miscL, "Team Switch")
+local teamInfo = info(S_team, "")
+local teamBusy = false
+local function switchTeam(name)
+	if teamBusy then return end
+	if lp.Team and lp.Team.Name == name then teamInfo.Text = "Already " .. name; return end
+	teamBusy = true
+	teamInfo.Text = "Switching to " .. name .. "..."
+	task.spawn(function()
+		local ok, res = pcall(function()
+			return game:GetService("ReplicatedStorage").Remotes.Teams.TeamChanger:InvokeServer("SwitchTeam", name)
+		end)
+		task.wait(0.5)
+		if ok and res then
+			teamInfo.Text = '<font color="#78ff8c">Now: ' .. tostring(lp.Team) .. "</font>"
+		else
+			teamInfo.Text = '<font color="#ff3c3c">Denied: ' .. name .. (ok and "" or (" (" .. tostring(res) .. ")")) .. "</font>"
+		end
+		teamBusy = false
+	end)
+end
+button(S_team, "Switch to Civilian", function() switchTeam("Civilian") end)
+button(S_team, "Switch to Test Subject", function() switchTeam("Test Subject") end)
+task.spawn(function()
+	local last
+	while H.alive do
+		local t = tostring(lp.Team)
+		if t ~= last and not teamBusy then last = t; teamInfo.Text = "Current team: " .. t end
+		task.wait(1)
+	end
+end)
+
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
 local CFG_FILE = "tsc_hub_config.json"
