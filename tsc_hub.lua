@@ -3480,7 +3480,7 @@ end)
 -- Players-Tab + optionales Overlay unten links.
 state.radioSpy = sv("radioSpy", false)
 state.radioOverlay = sv("radioOverlay", false)
-do
+;(function()
 	local CHANNELS = { "Main", "Surface", "QA Dev Gaming" }
 	local S_radio = section(plR, "Radio Spy")
 	local log, seenKey = {}, {}
@@ -3540,7 +3540,8 @@ do
 			task.wait(4)
 		end
 	end)
-end
+
+end)()
 
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
