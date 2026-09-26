@@ -27,7 +27,7 @@ gui.Parent = CoreGui
 local espFolder = Instance.new("Folder"); espFolder.Name = "TSC_ESP"; espFolder.Parent = gui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(260, 380); main.Position = UDim2.fromOffset(40, 200)
+main.Size = UDim2.fromOffset(260, 420); main.Position = UDim2.fromOffset(40, 200)
 main.BackgroundColor3 = Color3.fromRGB(20, 22, 28); main.BorderSizePixel = 0; main.Active = true
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
@@ -133,20 +133,64 @@ mkToggle(72, "ESP (Name/Team/Dist)", "esp", function(on)
 	if not on then for p in pairs(espObjs) do removeEsp(p) end end
 end)
 
+-- Helligkeits-Slider (Fullbright): 0..10 -> Brightness + ExposureCompensation
+do
+	local MINB, MAXB = 0, 10
+	local lbl = Instance.new("TextLabel")
+	lbl.Size = UDim2.new(1, -16, 0, 14); lbl.Position = UDim2.fromOffset(8, 104)
+	lbl.BackgroundTransparency = 1; lbl.Font = Enum.Font.Gotham; lbl.TextSize = 12
+	lbl.TextColor3 = Color3.fromRGB(220, 220, 220); lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Parent = main
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.new(1, -16, 0, 10); bar.Position = UDim2.fromOffset(8, 124)
+	bar.BackgroundColor3 = Color3.fromRGB(55, 58, 68); bar.BorderSizePixel = 0; bar.Active = true; bar.Parent = main
+	Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+	local fill = Instance.new("Frame")
+	fill.BackgroundColor3 = Color3.fromRGB(255, 200, 60); fill.BorderSizePixel = 0; fill.Parent = bar
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+	local function setB(v)
+		v = math.clamp(v, MINB, MAXB)
+		LPROPS.Brightness = v
+		LPROPS.ExposureCompensation = math.clamp((v - 2) / 3, -1, 2.5)
+		fill.Size = UDim2.new((v - MINB) / (MAXB - MINB), 0, 1, 0)
+		lbl.Text = ("Helligkeit: %.1f"):format(v)
+		if state.fullbright then pcall(applyFB) end
+	end
+	setB(2)
+	local sliding = false
+	local function fromX(x) setB(MINB + (x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X * (MAXB - MINB)) end
+	con(bar.InputBegan, function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 then sliding = true; fromX(i.Position.X) end
+	end)
+	con(UIS.InputChanged, function(i)
+		if sliding and i.UserInputType == Enum.UserInputType.MouseMovement then fromX(i.Position.X) end
+	end)
+	con(UIS.InputEnded, function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then sliding = false end end)
+end
+
 -- ================= MARKER =================
 local markHL = Instance.new("Highlight")
 markHL.Name = "TSC_MARK_HL"; markHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-markHL.FillColor = Color3.fromRGB(255, 30, 30); markHL.FillTransparency = 0.45
-markHL.OutlineColor = Color3.fromRGB(255, 255, 0); markHL.OutlineTransparency = 0
+markHL.FillColor = Color3.fromRGB(255, 0, 60); markHL.FillTransparency = 0.15
+markHL.OutlineColor = Color3.fromRGB(255, 255, 255); markHL.OutlineTransparency = 0
 markHL.Enabled = false; markHL.Parent = gui
 
 local markBB = Instance.new("BillboardGui")
-markBB.Name = "TSC_MARK_BB"; markBB.AlwaysOnTop = true; markBB.Size = UDim2.fromOffset(240, 44)
-markBB.StudsOffset = Vector3.new(0, 4.5, 0); markBB.LightInfluence = 0; markBB.Enabled = false; markBB.Parent = gui
+markBB.Name = "TSC_MARK_BB"; markBB.AlwaysOnTop = true; markBB.Size = UDim2.fromOffset(260, 58)
+markBB.StudsOffset = Vector3.new(0, 5, 0); markBB.LightInfluence = 0; markBB.Enabled = false; markBB.Parent = gui
 local markLbl = Instance.new("TextLabel")
-markLbl.Size = UDim2.fromScale(1, 1); markLbl.BackgroundTransparency = 1; markLbl.Font = Enum.Font.GothamBlack
-markLbl.TextSize = 16; markLbl.TextColor3 = Color3.fromRGB(255, 60, 60); markLbl.TextStrokeTransparency = 0
+markLbl.Size = UDim2.fromScale(1, 1); markLbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0); markLbl.BackgroundTransparency = 0.35
+markLbl.Font = Enum.Font.GothamBlack; markLbl.TextSize = 20; markLbl.TextColor3 = Color3.fromRGB(255, 255, 0)
+markLbl.TextStrokeTransparency = 0; markLbl.TextStrokeColor3 = Color3.fromRGB(255, 0, 60)
 markLbl.Parent = markBB
+Instance.new("UICorner", markLbl).CornerRadius = UDim.new(0, 6)
+local markStroke = Instance.new("UIStroke", markLbl)
+markStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; markStroke.Thickness = 3; markStroke.Color = Color3.fromRGB(255, 0, 60)
+
+-- Tracer-Linie: Bildschirm-Mitte unten -> Ziel
+local tracer = Instance.new("Frame")
+tracer.AnchorPoint = Vector2.new(0.5, 0.5); tracer.BorderSizePixel = 0; tracer.BackgroundColor3 = Color3.fromRGB(255, 0, 60)
+tracer.Visible = false; tracer.Parent = gui
 
 -- Randpfeil, wenn Ziel off-screen / hinter mir
 local arrow = Instance.new("TextLabel")
@@ -155,26 +199,26 @@ arrow.Font = Enum.Font.GothamBlack; arrow.TextSize = 16; arrow.TextColor3 = Colo
 arrow.TextStrokeTransparency = 0; arrow.Visible = false; arrow.Parent = gui
 
 local markInfo = Instance.new("TextLabel")
-markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 106)
+markInfo.Size = UDim2.new(1, -16, 0, 20); markInfo.Position = UDim2.fromOffset(8, 146)
 markInfo.BackgroundTransparency = 1; markInfo.Font = Enum.Font.Gotham; markInfo.TextSize = 13
 markInfo.TextColor3 = Color3.fromRGB(255, 120, 120); markInfo.TextXAlignment = Enum.TextXAlignment.Left
 markInfo.Text = "Marker: -"; markInfo.Parent = main
 
 local clearBtn = Instance.new("TextButton")
-clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 106)
+clearBtn.Size = UDim2.fromOffset(60, 20); clearBtn.Position = UDim2.new(1, -68, 0, 146)
 clearBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40); clearBtn.BorderSizePixel = 0; clearBtn.Font = Enum.Font.Gotham
 clearBtn.TextSize = 12; clearBtn.TextColor3 = Color3.new(1, 1, 1); clearBtn.Text = "weg"; clearBtn.Parent = main
 Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 5)
 
 local search = Instance.new("TextBox")
-search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 132)
+search.Size = UDim2.new(1, -16, 0, 24); search.Position = UDim2.fromOffset(8, 172)
 search.BackgroundColor3 = Color3.fromRGB(40, 42, 50); search.BorderSizePixel = 0; search.Font = Enum.Font.Gotham
 search.TextSize = 13; search.TextColor3 = Color3.new(1, 1, 1); search.PlaceholderText = "Spieler suchen..."
 search.Text = ""; search.ClearTextOnFocus = false; search.Parent = main
 Instance.new("UICorner", search).CornerRadius = UDim.new(0, 5)
 
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, -16, 1, -170); list.Position = UDim2.fromOffset(8, 162)
+list.Size = UDim2.new(1, -16, 1, -210); list.Position = UDim2.fromOffset(8, 202)
 list.BackgroundColor3 = Color3.fromRGB(28, 30, 36); list.BorderSizePixel = 0; list.ScrollBarThickness = 5
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y; list.CanvasSize = UDim2.new(); list.Parent = main
 local lay = Instance.new("UIListLayout", list); lay.Padding = UDim.new(0, 2); lay.SortOrder = Enum.SortOrder.Name
@@ -255,19 +299,24 @@ end)
 con(RunService.RenderStepped, function()
 	local p = markedPlayer()
 	if not p then
-		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false
+		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false; tracer.Visible = false
 		markInfo.Text = state.markName and ("Marker: " .. state.markName .. " (offline)") or "Marker: -"
 		return
 	end
 	local r, c = rootOf(p)
 	if not r then
-		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false
+		markHL.Enabled = false; markBB.Enabled = false; arrow.Visible = false; tracer.Visible = false
 		markInfo.Text = "Marker: " .. p.Name .. " (kein Char/nicht gestreamt)"
 		return
 	end
 	if markHL.Adornee ~= c then markHL.Adornee = c end
 	if markBB.Adornee ~= r then markBB.Adornee = r end
 	markHL.Enabled = true; markBB.Enabled = true
+	-- Pulsieren (rot <-> magenta, Fill 0.05..0.4)
+	local t = (math.sin(os.clock() * 6) + 1) / 2
+	markHL.FillTransparency = 0.05 + 0.35 * t
+	markHL.FillColor = Color3.fromRGB(255, 0, math.floor(60 + 160 * t))
+	markStroke.Color = markHL.FillColor
 	local myRoot = rootOf(lp)
 	local d = myRoot and math.floor((r.Position - myRoot.Position).Magnitude) or 0
 	markLbl.Text = "◆ " .. p.DisplayName .. " ◆\n" .. d .. "m"
@@ -277,6 +326,14 @@ con(RunService.RenderStepped, function()
 	local sp, onScreen = cam:WorldToViewportPoint(r.Position)
 	if onScreen and sp.Z > 0 then
 		arrow.Visible = false
+		local a = Vector2.new(vp.X / 2, vp.Y - 4)
+		local b = Vector2.new(sp.X, sp.Y)
+		local v = b - a
+		tracer.Size = UDim2.fromOffset(v.Magnitude, 2)
+		tracer.Position = UDim2.fromOffset((a.X + b.X) / 2, (a.Y + b.Y) / 2)
+		tracer.Rotation = math.deg(math.atan2(v.Y, v.X))
+		tracer.BackgroundColor3 = markHL.FillColor
+		tracer.Visible = true
 	else
 		local center = vp / 2
 		local dir = Vector2.new(sp.X, sp.Y) - center
@@ -290,7 +347,9 @@ con(RunService.RenderStepped, function()
 		arrow.Position = UDim2.fromOffset(pos.X, pos.Y)
 		arrow.Text = "➤ " .. p.DisplayName .. " " .. d .. "m"
 		arrow.Rotation = 0
+		arrow.TextSize = 18 + math.floor(4 * t)
 		arrow.Visible = true
+		tracer.Visible = false
 	end
 end)
 
