@@ -3570,7 +3570,8 @@ state.chatOverlay = sv("chatOverlay", false)
 		local t = {}
 		for i = math.max(1, #log - n + 1), #log do
 			local m = log[i]
-			t[#t + 1] = ('<font color="#767676">[%s]%s</font> <font color="#8fd0ff">%s</font>: %s'):format(m.t, m.far and " far" or "", esc(m.name), esc(m.text))
+			t[#t + 1] = ('<font color="#767676">[%s]%s</font> <font color="#%s">[%s]</font> <font color="#8fd0ff">%s</font>: %s'):format(
+				m.t, m.far and " far" or "", m.roleCol, esc(m.role), esc(m.name), esc(m.text))
 		end
 		return table.concat(t, "\n")
 	end
@@ -3582,8 +3583,10 @@ state.chatOverlay = sv("chatOverlay", false)
 		local pl = src and Players:GetPlayerByUserId(src.UserId)
 		local c = pl and pl.Character
 		local far = not (c and c:IsDescendantOf(workspace))
+		local team = pl and pl.Team
 		log[#log + 1] = { t = os.date("%H:%M:%S"), name = pl and pl.DisplayName or (src and src.Name) or "?",
-			text = msg.Text or "", far = far and pl ~= lp }
+			text = msg.Text or "", far = far and pl ~= lp,
+			role = team and team.Name or "", roleCol = team and team.TeamColor.Color:ToHex() or "767676" }
 		while #log > MAXLOG do table.remove(log, 1) end
 		dirty = true
 	end)
