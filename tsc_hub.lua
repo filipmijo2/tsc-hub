@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -3541,6 +3541,71 @@ state.radioOverlay = sv("radioOverlay", false)
 		end
 	end)
 
+end)()
+
+-- ================= CHAT LOG =================
+-- TextChatService liefert alle RBXGeneral-Nachrichten an den Client (auch von weit weg/nicht geladenen Spielern),
+-- das Spiel blendet nur das Chatfenster aus (Bubbles max 100 Studs). MessageReceived mitlesen (Listener, kein Hook).
+state.chatLog = sv("chatLog", false)
+state.chatOverlay = sv("chatOverlay", false)
+;(function()
+	local TCS = game:GetService("TextChatService")
+	local S_chat = section(plR, "Chat Log")
+	local log = {}
+	local MAXLOG = 40
+	local function esc(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+	toggle(S_chat, "Read Chat", "chatLog", function() end)
+	toggle(S_chat, "Chat Overlay", "chatOverlay", function() end)
+	local chatInfo = info(S_chat, "")
+	local ov = Instance.new("TextLabel")
+	ov.AnchorPoint = Vector2.new(0, 1); ov.Position = UDim2.new(0, 480, 1, -120); ov.Size = UDim2.fromOffset(460, 0)
+	ov.AutomaticSize = Enum.AutomaticSize.Y; ov.BackgroundColor3 = Color3.fromRGB(10, 10, 12); ov.BackgroundTransparency = 0.35
+	ov.Font = Enum.Font.Code; ov.TextSize = 13; ov.RichText = true; ov.TextWrapped = true; ov.TextColor3 = Color3.fromRGB(230, 230, 230)
+	ov.TextXAlignment = Enum.TextXAlignment.Left; ov.TextYAlignment = Enum.TextYAlignment.Top; ov.Visible = false; ov.Parent = gui
+	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
+	local pad = Instance.new("UIPadding", ov); pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
+	pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+	local dirty = false
+	local function lines(n)
+		local t = {}
+		for i = math.max(1, #log - n + 1), #log do
+			local m = log[i]
+			t[#t + 1] = ('<font color="#767676">[%s]%s</font> <font color="#8fd0ff">%s</font>: %s'):format(m.t, m.far and " far" or "", esc(m.name), esc(m.text))
+		end
+		return table.concat(t, "\n")
+	end
+	con(TCS.MessageReceived, function(msg)
+		if not state.chatLog then return end
+		local ch = msg.TextChannel and msg.TextChannel.Name or ""
+		if ch == "RBXSystem" then return end
+		local src = msg.TextSource
+		local pl = src and Players:GetPlayerByUserId(src.UserId)
+		local c = pl and pl.Character
+		local far = not (c and c:IsDescendantOf(workspace))
+		log[#log + 1] = { t = os.date("%H:%M:%S"), name = pl and pl.DisplayName or (src and src.Name) or "?",
+			text = msg.Text or "", far = far and pl ~= lp }
+		while #log > MAXLOG do table.remove(log, 1) end
+		dirty = true
+	end)
+	task.spawn(function()
+		while H.alive do
+			if state.chatLog then
+				if dirty then
+					dirty = false
+					chatInfo.Text = lines(14)
+					ov.Text = '<font color="#8fd0ff">CHAT</font>\n' .. lines(7)
+				elseif #log == 0 then
+					chatInfo.Text = "waiting for messages..."
+					ov.Text = '<font color="#8fd0ff">CHAT</font>\n...'
+				end
+				ov.Visible = state.chatOverlay
+			else
+				ov.Visible = false
+				chatInfo.Text = ""
+			end
+			task.wait(0.5)
+		end
+	end)
 end)()
 
 -- ================= CONFIG =================
