@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4913,6 +4913,133 @@ state.dmgShow = sv("dmgShow", false)
 		end
 	end)
 	table.insert(H.conns, { Disconnect = function() pcall(restoreAll) end })
+end)()
+-- ================= INFECTION SOURCES =================
+-- Infektion laeuft serverseitig: Character.InfectedValues.InfectionLevel steigt bis MaxInfectionValue (100), dann
+-- wird man ins Infected-Team gesetzt. Zwei Quellen: Pfuetzen (Instanz mit Attribut InfectAmount + InfectedType;
+-- Vorlagen in workspace.InfectedPuddles, echte entstehen an MessNodes mit AllowsInfected=true) und Treffer von
+-- Infizierten (Feld LastHit). Der InfectedType der Quelle bestimmt, WAS man wird und damit welche Faehigkeiten.
+-- Rein lesend: Attribute + replizierte Werte, keine Remotes, keine Hooks. Suche ist ereignisgesteuert
+-- (DescendantAdded) statt per Dauerscan ueber ~120k Instanzen.
+state.infEsp = sv("infEsp", false)
+;(function()
+	local S_inf = section(visL, "Infection Sources")
+	local puddles = {}   -- [instance] = true
+	local marks = {}     -- [instance] = {bb=, lbl=, hl=}
+	toggle(S_inf, "Show Infection Sources", "infEsp", function(on)
+		if not on then for _, o in pairs(marks) do pcall(function() o.bb:Destroy() end) end end
+	end)
+	local meInfo = info(S_inf, "")
+	local pudInfo = info(S_inf, "")
+	local srcInfo = info(S_inf, "")
+
+	local function isPuddle(d)
+		return d:GetAttribute("InfectAmount") ~= nil and not d:IsDescendantOf(workspace.InfectedPuddles)
+	end
+	local function partOf(d)
+		if d:IsA("BasePart") then return d end
+		return d:FindFirstChildWhichIsA("BasePart")
+	end
+	-- Startsuche einmalig, danach nur noch per Ereignis
+	for _, d in ipairs(workspace:GetDescendants()) do if isPuddle(d) then puddles[d] = true end end
+	con(workspace.DescendantAdded, function(d)
+		task.defer(function() if d.Parent and isPuddle(d) then puddles[d] = true end end)
+	end)
+
+	local function clearMark(d)
+		local o = marks[d]
+		if o then pcall(function() o.bb:Destroy() end) pcall(function() o.hl:Destroy() end) marks[d] = nil end
+	end
+
+	task.spawn(function()
+		while H.alive do
+			if state.infEsp then
+				local c = lp.Character
+				local iv = c and c:FindFirstChild("InfectedValues")
+				local my = c and c:FindFirstChild("HumanoidRootPart")
+				-- eigener Zustand
+				local lvl, max, spore, full = 0, 100, 1, false
+				if iv then
+					local function gv(n, d) local o = iv:FindFirstChild(n) return o and o.Value or d end
+					lvl, max, spore, full = gv("InfectionLevel", 0), gv("MaxInfectionValue", 100), gv("SporeImmunity", 1), gv("FullImmunity", false)
+					meInfo.Text = ('you: <font color="%s">%d / %d</font>  ·  spore immunity %s%s'):format(
+						lvl > 0 and "#ffc800" or "#78ff8c", lvl, max, tostring(spore), full and '  ·  <font color="#78ff8c">FULL IMMUNITY</font>' or "")
+				else
+					meInfo.Text = "no InfectedValues on your character"
+				end
+				-- Pfuetzen
+				local lines, n = {}, 0
+				for d in pairs(puddles) do
+					if d.Parent then
+						local part = partOf(d)
+						local amt = tonumber(d:GetAttribute("InfectAmount")) or 0
+						local typ = tostring(d:GetAttribute("InfectedType") or "?")
+						local eff = amt * (tonumber(spore) or 1)
+						local need = eff > 0 and math.max(1, math.ceil((max - lvl) / eff)) or 0
+						local dist = (part and my) and math.floor((part.Position - my.Position).Magnitude) or -1
+						n = n + 1
+						if #lines < 8 then
+							lines[#lines + 1] = ('<font color="#c8a0ff">%s</font> %s  amount %d  ·  %d contact%s'):format(
+								typ, dist >= 0 and (dist .. "m") or "?", amt, need, need == 1 and "" or "s")
+						end
+						if part then
+							local o = marks[d]
+							if not o then
+								local bb = Instance.new("BillboardGui")
+								bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(220, 30); bb.StudsOffset = Vector3.new(0, 2.5, 0)
+								bb.LightInfluence = 0; bb.Adornee = part; bb.Parent = gui
+								local l = Instance.new("TextLabel")
+								l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+								l.TextSize = 13; l.TextColor3 = Color3.fromRGB(200, 160, 255); l.TextStrokeTransparency = 0.25; l.Parent = bb
+								local hl = Instance.new("Highlight")
+								hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop; hl.FillColor = Color3.fromRGB(180, 120, 255)
+								hl.FillTransparency = 0.5; hl.OutlineColor = Color3.fromRGB(230, 200, 255); hl.Parent = gui
+								hl.Adornee = d:IsA("Model") and d or part
+								o = { bb = bb, lbl = l, hl = hl }
+								marks[d] = o
+							end
+							o.lbl.Text = ("%s  %d contact%s"):format(typ, need, need == 1 and "" or "s")
+						end
+					else
+						puddles[d] = nil; clearMark(d)
+					end
+				end
+				pudInfo.Text = n > 0 and table.concat(lines, "\n") or "no infection puddles in the world right now"
+				-- Infizierte in der Naehe (zweite Quelle: sich schlagen lassen)
+				local Check = nil
+				local okm, mod = pcall(require, game:GetService("ReplicatedStorage").Modules.InfectedCheckModule)
+				if okm then Check = mod end
+				local near = {}
+				if Check and my then
+					for _, p in ipairs(Players:GetPlayers()) do
+						if p ~= lp then
+							local pc = p.Character
+							local pr = pc and pc:FindFirstChild("HumanoidRootPart")
+							if pr and pc:IsDescendantOf(workspace) then
+								local ok2, isInf = pcall(Check, p)
+								if ok2 and isInf then
+									local pv = pc:FindFirstChild("InfectedValues")
+									local t = pv and pv:FindFirstChild("InfectedType")
+									near[#near + 1] = { (pr.Position - my.Position).Magnitude, p.Name, t and tostring(t.Value) or "?" }
+								end
+							end
+						end
+					end
+				end
+				table.sort(near, function(a, b) return a[1] < b[1] end)
+				local nl = {}
+				for i = 1, math.min(#near, 5) do
+					nl[#nl + 1] = ('<font color="#ff8fb0">%s</font> %dm  %s'):format(near[i][2], math.floor(near[i][1]), near[i][3])
+				end
+				srcInfo.Text = #nl > 0 and ("infected nearby:\n" .. table.concat(nl, "\n")) or "no infected loaded nearby"
+			elseif meInfo.Text ~= "" then
+				meInfo.Text = ""; pudInfo.Text = ""; srcInfo.Text = ""
+				for d in pairs(marks) do clearMark(d) end
+			end
+			task.wait(1)
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() for d in pairs(marks) do clearMark(d) end end })
 end)()
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
