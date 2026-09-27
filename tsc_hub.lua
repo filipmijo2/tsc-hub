@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4324,6 +4324,76 @@ state.adonisOverlay = sv("adonisOverlay", false)
 				if isfile(LOG_FILE) then pcall(appendfile, LOG_FILE, chunk) else pcall(writefile, LOG_FILE, chunk) end
 			end
 			task.wait(0.5)
+		end
+	end)
+end)()
+
+-- ================= INFECTED: INFINITE ABILITIES =================
+-- Die Fähigkeiten des Infected (Cloak J, Hypnotize K) laufen über eine globale Client-Tabelle `abilitySlots`
+-- (Character.AbilityHandlerClient). Dauer und Abklingzeit zählt der CLIENT dort selbst herunter; das Ende meldet
+-- erst der Client per FireServer("Uncloak"). Gemessen 27.09.: Duration festgehalten -> 24 s durchgehend getarnt
+-- (Limit normal 10 s), Server hat KEINEN eigenen Timer. Hier: Duration = MaxDuration und Cooldown = 0 halten.
+-- Kein Hook, nur Zahlen in einer Tabelle. Tabelle wird pro Character neu gebaut -> bei Verlust neu suchen.
+state.infAbil = sv("infAbil", false)
+;(function()
+	local S_ab = section(miscL, "Infected Abilities")
+	toggle(S_ab, "Infinite Cloak / Abilities", "infAbil", function() end)
+	local abInfo = info(S_ab, "")
+	info(S_ab, "Cloak = J, Hypnotize = K. Holds duration + cooldown; the end is only ever reported by the client.")
+
+	local slots = nil
+	local function looksLikeSlots(t)
+		if type(t) ~= "table" then return false end
+		for _, s in pairs(t) do
+			if type(s) == "table" and rawget(s, "Keybind") ~= nil and rawget(s, "Cooldown") ~= nil then return true end
+		end
+		return false
+	end
+	local function valid()
+		if not looksLikeSlots(slots) then return false end
+		for _, s in pairs(slots) do
+			-- OriginScript muss noch im aktuellen Character hängen
+			local o = type(s) == "table" and rawget(s, "OriginScript")
+			if typeof(o) == "Instance" then return o:IsDescendantOf(workspace) end
+		end
+		return false
+	end
+	local function findSlots()
+		if typeof(getgc) ~= "function" then return end
+		for _, v in ipairs(getgc(true)) do
+			if looksLikeSlots(v) then
+				local o
+				for _, s in pairs(v) do if type(s) == "table" then o = rawget(s, "OriginScript") break end end
+				if typeof(o) ~= "Instance" or o:IsDescendantOf(workspace) then slots = v return end
+			end
+		end
+	end
+
+	local lastScan = 0
+	task.spawn(function()
+		while H.alive do
+			if state.infAbil then
+				if not valid() and os.clock() - lastScan > 2 then lastScan = os.clock(); pcall(findSlots) end
+				if valid() then
+					local names = {}
+					for _, s in pairs(slots) do
+						if type(s) == "table" then
+							local ok = pcall(function()
+								if rawget(s, "MaxDuration") then s.Duration = s.MaxDuration end
+								if (rawget(s, "Cooldown") or 0) > 0 then s.Cooldown = 0 end
+							end)
+							local o = rawget(s, "OriginScript")
+							if ok and typeof(o) == "Instance" then names[#names + 1] = o.Name end
+						end
+					end
+					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>'):format(#names > 0 and table.concat(names, ", ") or "?")
+				else
+					abInfo.Text = "no abilities found (are you Infected?)"
+				end
+			else
+				abInfo.Text = ""
+			end
+			task.wait(0.1)
 		end
 	end)
 end)()
