@@ -2102,6 +2102,8 @@ task.spawn(function()
 							itemObjs[t] = o
 						end
 						if o.bb.Adornee ~= h then o.bb.Adornee = h end
+						-- Waffen (Tool mit GunData: Schuss- und Nahkampfwaffen) rot, Rest grün
+						o.lbl.TextColor3 = t:FindFirstChild("GunData") and Color3.fromRGB(255, 70, 70) or Color3.fromRGB(120, 255, 140)
 						o.lbl.Text = "▣ " .. t.Name .. "  " .. math.floor(d) .. "m"
 						applyFade(o.lbl, fadeAlpha(d), 12)
 					else
