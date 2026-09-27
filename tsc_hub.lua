@@ -922,13 +922,19 @@ end)()
 -- Kill Aura (Nahkampf, z. B. Fäuste): Taste GEHALTEN -> nächster Gegner in Reichweite wird anvisiert (echte Maus: abs im
 -- 3rd Person, rel im 1st Person, geglättet) und mit dem gewählten Abstand per echtem Linksklick geschlagen, solange die
 -- Taste gehalten wird. Sticky: bleibt auf dem Ziel, bis es tot/down/außer Reichweite ist. Den Schlag sendet der Spieleigene
--- Ablauf (Richtung = Kamera-Strahl durch die Maus, Stufe = Charge). Für die Dauer der Aura: Charge-Schwellen ~0 (Stufe 3,
--- bestätigt) und Range lokal auf Aura-Reichweite (UNGETESTET, ob der Server die Distanz prüft). Keine Hooks, keine Remotes.
+-- Ablauf (Richtung = Kamera-Strahl durch die Maus, Stufe = Charge). Range lokal auf Aura-Reichweite (UNGETESTET, ob der
+-- Server die Distanz prüft). Keine Hooks, keine Remotes.
+-- Charge "legit": pro Schlag wird nur die Stufe beansprucht, die ein echter Spieler seit dem letzten Schlag hätte aufladen
+-- können (echte Schwellen Fäuste ~1/2/2.2-3.2 s). Dafür werden direkt vor dem Klick nur die erreichten Schwellen auf ~0
+-- gesetzt, die übrigen bleiben echt -> 1-Frame-Klick ergibt genau diese Stufe. Der Server stuft zu schnelle Stufe-3-Schläge
+-- ohnehin herunter; so sehen die Pakete auch im Log wie echte aus.
 state.aura = sv("aura", false); state.auraRange = sv("auraRange", 10); state.auraTeam = sv("auraTeam", true)
 state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2); state.auraRing = sv("auraRing", true)
 ;(function()
 	local S_aura = section(sub.Aimbot[2], "Kill Aura (Melee)")
 	local saved = setmetatable({}, { __mode = "k" }) -- [table] = {key = original}
+	local real = setmetatable({}, { __mode = "k" }) -- [Charge-Tabelle] = {Low, Mid, Max} echt
+	local lastSwing = 0 -- letzter Schlag (Aura oder von Hand), für die legit Charge-Stufe
 	local function set(t, k, v)
 		if table.isfrozen(t) then return end
 		saved[t] = saved[t] or {}
@@ -944,9 +950,33 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		-- Windup = rein lokale Pause zwischen Loslassen und Schlag (task.wait(u14.Windup or 0.07)); Server sieht sie nicht
 		if type(rawget(t, "Windup")) == "number" then set(t, "Windup", 0.01) end
 		local c = rawget(t, "Charge")
-		if type(rawget(c, "MaxCharge")) == "number" then
-			set(c, "LowCharge", 0.001); set(c, "MidCharge", 0.002); set(c, "MaxCharge", 0.003)
+		if type(rawget(c, "MaxCharge")) == "number" and not real[c] then
+			-- echte Schwellen merken (falls schon gepatcht, z. B. durch "Always Max Charge": sichere Obergrenzen)
+			local function rv(k, def)
+				local o = saved[c] and saved[c][k]
+				local v = (type(o) == "number" and o > 0.05) and o or rawget(c, k)
+				return (type(v) == "number" and v > 0.05) and v or def
+			end
+			real[c] = { rv("LowCharge", 1), rv("MidCharge", 2), rv("MaxCharge", 3.2) }
 		end
+	end
+	-- Stufe L (0-3) für den nächsten Klick einstellen
+	local function setLevel(L)
+		for c, rl in pairs(real) do
+			if not table.isfrozen(c) then
+				set(c, "LowCharge", L >= 1 and 0.001 or rl[1])
+				set(c, "MidCharge", L >= 2 and 0.002 or rl[2])
+				set(c, "MaxCharge", L >= 3 and 0.003 or rl[3])
+			end
+		end
+	end
+	-- welche Stufe ein echter Spieler nach `el` Sekunden seit dem letzten Schlag erreicht haben kann (strengste Schwellen)
+	local function legitLevel(el)
+		local lo, mi, ma = 0, 0, 0
+		for _, rl in pairs(real) do lo, mi, ma = math.max(lo, rl[1]), math.max(mi, rl[2]), math.max(ma, rl[3]) end
+		if ma == 0 then lo, mi, ma = 1, 2, 3.2 end
+		el = el - 0.15 -- Windup + Reaktionszeit des vorigen Schlags
+		return el >= ma and 3 or el >= mi and 2 or el >= lo and 1 or 0
 	end
 	local function patchAll()
 		for _, cont in ipairs({ lp:FindFirstChild("Backpack"), lp.Character }) do
@@ -966,9 +996,14 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 	end
 	local function restoreAll()
 		for t, kv in pairs(saved) do for k, v in pairs(kv) do pcall(rawset, t, k, v) end end
+		-- Schwellen immer auf die echten Werte (falls die Tabelle schon vorher gepatcht war)
+		for c, rl in pairs(real) do
+			if not table.isfrozen(c) then pcall(rawset, c, "LowCharge", rl[1]); pcall(rawset, c, "MidCharge", rl[2]); pcall(rawset, c, "MaxCharge", rl[3]) end
+		end
 		table.clear(saved)
+		table.clear(real)
 	end
-	toggle(S_aura, "Enabled", "aura", function(on) if on then pcall(patchAll) else restoreAll() end end, "aura")
+	toggle(S_aura, "Enabled", "aura", function(on) if on then pcall(patchAll); setLevel(0) else restoreAll() end end, "aura")
 	slider(S_aura, "Range", 6, 14, state.auraRange, function(v)
 		state.auraRange = math.floor(v + 0.5)
 		if state.aura then pcall(patchAll) end
@@ -980,7 +1015,7 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		state.auraSmooth = math.floor(v + 0.5); state.auraSmooth2 = state.auraSmooth; return tostring(state.auraSmooth) end, "auraSmooth")
 	toggle(S_aura, "Ignore Teammates", "auraTeam", function() end)
 	toggle(S_aura, "Show Range Circle", "auraRing", function() end)
-	local auraInfo = info(S_aura, "Hold the key with a melee weapon (fists): hits the nearest enemy in range with full charge until you let go. Range above 6 is untested server-side.")
+	local auraInfo = info(S_aura, "Hold the key with a melee weapon (fists): hits the nearest enemy in range until you let go. Each hit only claims the charge a real player could have built up since the last punch (first hit = full charge). Range above 6 is untested server-side.")
 
 	local function meleeTool()
 		local c = lp.Character
@@ -1091,12 +1126,15 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 					auraInfo.Text = ('Status: locked <font color="#d266b4">%s</font> · out of range (%.0f)'):format(target.Name, distTo(part))
 				end
 				if inRange and onTarget and os.clock() - lastHit >= state.auraDelay then
+					local L = legitLevel(os.clock() - lastSwing)
+					setLevel(L)
+					lastSwing = os.clock()
 					mouse1press()
 					RunService.RenderStepped:Wait()
 					mouse1release()
 					lastHit = os.clock()
 					hits = hits + 1
-					auraInfo.Text = ('Status: <font color="#d266b4">%s</font> · %d hits'):format(target.Name, hits)
+					auraInfo.Text = ('Status: <font color="#d266b4">%s</font> · %d hits · charge %d'):format(target.Name, hits, L)
 					RunService.RenderStepped:Wait()
 				else
 					RunService.RenderStepped:Wait()
@@ -1106,11 +1144,19 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		target = nil
 		busy = false
 	end
+	-- Schläge von Hand zählen auch (setzen den Auflade-Timer zurück); die Aura setzt lastSwing selbst vor dem Klick
+	con(UIS.InputBegan, function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 and not busy and meleeTool() then lastSwing = os.clock() end
+	end)
 	con(UIS.InputBegan, function(i)
 		if state.aura and state.keys.aura and keyMatch(i, state.keys.aura) and not UIS:GetFocusedTextBox() then
 			if typeof(mouse1press) ~= "function" then auraInfo.Text = "Status: mouse1press missing"; return end
 			task.spawn(run)
 		end
+	end)
+	con(UIS.InputEnded, function(i)
+		-- nach dem Loslassen echte Schwellen zurück, damit Schläge von Hand normal aufladen
+		if state.keys.aura and keyMatch(i, state.keys.aura) then task.delay(0.3, function() if not busy and next(real) then setLevel(0) end end) end
 	end)
 
 	-- Reichweiten-Kreis am Boden (wie der FOV-Kreis), pink sobald ein Gegner drin ist
