@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -2209,6 +2209,7 @@ staffPanel.Font = T.font; staffPanel.TextSize = 13; staffPanel.RichText = true
 staffPanel.TextColor3 = T.text; staffPanel.TextXAlignment = Enum.TextXAlignment.Left
 staffPanel.TextYAlignment = Enum.TextYAlignment.Top; staffPanel.Visible = false; staffPanel.Parent = gui
 corner(staffPanel, 4); stroke(staffPanel, T.edge)
+H.staffPanel = staffPanel -- verschiebbar gemacht weiter unten (H.movable ist später definiert)
 local pad = Instance.new("UIPadding", staffPanel)
 pad.PaddingLeft = UDim.new(0, 8); pad.PaddingRight = UDim.new(0, 8); pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
 
@@ -2298,7 +2299,9 @@ task.spawn(function()
 			staffPanel.Visible = true
 			staffSummary.Text = ('<font color="#d266b4">%d staff in server</font>'):format(n)
 		else
-			staffPanel.Visible = false
+			-- bei offenem Menü als Platzhalter sichtbar, damit man es verschieben kann
+			staffPanel.Visible = state.staff and main.Visible
+			if staffPanel.Visible then staffPanel.Text = '<font color="#d266b4">STAFF RADAR</font>\nno staff · drag to move' end
 			staffSummary.Text = state.staff and "No staff detected." or "off"
 		end
 		task.wait(math.max(0.5, state.updInt))
@@ -4074,6 +4077,8 @@ H.movable = function(f, key)
 	end)
 end
 
+H.movable(H.staffPanel, "staffPos")
+
 -- ================= RADIO SPY =================
 -- Remotes.RadioHistory:InvokeServer() (ohne Args) liefert die letzten 20 Funknachrichten der "gehörten" Kanäle
 -- (Main) – auch ohne Funkgerät / als Test Subject. Pollen alle 4s (wie das Spiel selbst), Dedupe, Anzeige im
@@ -4238,14 +4243,14 @@ state.disgDetect = sv("disgDetect", true)
 					if not bb or bb.Adornee ~= head then
 						clearTag(p)
 						bb = Instance.new("BillboardGui")
-						bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(260, 34); bb.StudsOffset = Vector3.new(0, 5.5, 0)
+						bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(170, 22); bb.StudsOffset = Vector3.new(0, 4.6, 0)
 						bb.LightInfluence = 0; bb.Adornee = head; bb.Parent = gui
 						local l = Instance.new("TextLabel")
-						l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBlack; l.TextSize = 13
-						l.TextColor3 = Color3.fromRGB(255, 70, 70); l.TextStrokeTransparency = 0.2; l.Parent = bb
+						l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold; l.TextSize = 9
+						l.TextColor3 = Color3.fromRGB(255, 110, 110); l.TextTransparency = 0.2; l.TextStrokeTransparency = 0.5; l.Parent = bb
 						tags[p] = bb
 					end
-					bb.TextLabel.Text = ("DISGUISED\nreal: %s  |  shown: %s"):format(real, fake)
+					bb.TextLabel.Text = ("disguised · real: %s"):format(real)
 					lines[#lines + 1] = ('<font color="#ff4646">%s</font>: real <b>%s</b> → shown %s'):format(p.Name, real, fake)
 				else
 					clearTag(p)
@@ -4506,6 +4511,108 @@ state.infAbil = sv("infAbil", false)
 				abInfo.Text = ""
 			end
 			task.wait(0.25)
+		end
+	end)
+end)()
+
+-- ================= BINGO =================
+-- Bingo Card (Tool): das Server-Script BingoCardScript markiert gezogene Zahlen selbst -> Zelle TextColor3 = rot
+-- (Mitte = rotes "X", Freifeld). Einlösen = mit der Karte in der Hand klicken (Tool.Activated -> Server prüft,
+-- Payout 750 bzw. NoBingo-Sound). Hier: Linie (Reihe/Spalte/Diagonale) lokal aus den Zellfarben erkennen, melden und
+-- optional per echtem Klick einlösen (Karte kurz ausrüsten, mouse1click, vorheriges Tool zurück). Keine Remotes.
+state.bingoNotify = sv("bingoNotify", true); state.bingoAuto = sv("bingoAuto", false)
+;(function()
+	local S_bingo = section(miscR, "Bingo")
+	toggle(S_bingo, "Notify On Bingo", "bingoNotify", function() end)
+	toggle(S_bingo, "Auto Claim", "bingoAuto", function() end)
+	local bInfo = info(S_bingo, "")
+	info(S_bingo, "Needs a Bingo Card (150 credits, Bingo Guy). Auto Claim equips the card for a moment and clicks with it.")
+
+	local function getCard()
+		local c = lp.Character
+		return (c and c:FindFirstChild("Bingo Card")) or lp.Backpack:FindFirstChild("Bingo Card")
+	end
+	local function isRed(l) local c = l.TextColor3 return c.R > 0.8 and c.G < 0.2 and c.B < 0.2 end
+	-- 5x5-Raster aus den Bildschirm-/Surface-Positionen (LayoutOrder ist überall 0)
+	local function readGrid(card)
+		local fr = card:FindFirstChild("Handle") and card.Handle:FindFirstChild("SurfaceGui") and card.Handle.SurfaceGui:FindFirstChild("Frame")
+		if not fr then return end
+		local cells = {}
+		for _, l in ipairs(fr:GetChildren()) do if l:IsA("TextLabel") then cells[#cells + 1] = l end end
+		if #cells ~= 25 then return end
+		table.sort(cells, function(a, b)
+			local ay, by = math.floor(a.AbsolutePosition.Y + 0.5), math.floor(b.AbsolutePosition.Y + 0.5)
+			if ay ~= by then return ay < by end
+			return a.AbsolutePosition.X < b.AbsolutePosition.X
+		end)
+		local g, marked = {}, 0
+		for i, l in ipairs(cells) do
+			local r, c = math.floor((i - 1) / 5) + 1, (i - 1) % 5 + 1
+			g[r] = g[r] or {}
+			g[r][c] = isRed(l)
+			if g[r][c] then marked = marked + 1 end
+		end
+		return g, marked
+	end
+	local function findLine(g)
+		for r = 1, 5 do local ok = true for c = 1, 5 do ok = ok and g[r][c] end if ok then return "row " .. r end end
+		for c = 1, 5 do local ok = true for r = 1, 5 do ok = ok and g[r][c] end if ok then return "column " .. c end end
+		local d1, d2 = true, true
+		for i = 1, 5 do d1 = d1 and g[i][i]; d2 = d2 and g[i][6 - i] end
+		if d1 then return "diagonal" end
+		if d2 then return "diagonal" end
+	end
+
+	local claiming, lastClaim, notified = false, 0, nil
+	local function claim(card)
+		if claiming or os.clock() - lastClaim < 8 then return end
+		local c = lp.Character
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if not (hum and hum.Health > 0) or not focused() or UIS:GetFocusedTextBox() or c:GetAttribute("Down") then return end
+		if typeof(mouse1click) ~= "function" then bInfo.Text = "Status: mouse1click missing" return end
+		claiming = true
+		task.spawn(function()
+			local prev = c:FindFirstChildOfClass("Tool")
+			if prev ~= card then hum:EquipTool(card); task.wait(0.35) end
+			-- Klick nur, wenn die Maus nicht über dem Hub-Menü liegt (sonst schluckt die GUI den Klick)
+			local t0 = os.clock()
+			while main.Visible and os.clock() - t0 < 3 do task.wait(0.1) end
+			if card.Parent == c then
+				mouse1click()
+				lastClaim = os.clock()
+				bInfo.Text = '<font color="#d266b4">Status: claimed (clicked)</font>'
+				task.wait(0.6)
+			end
+			if prev and prev ~= card and prev.Parent == lp.Backpack then hum:EquipTool(prev)
+			elseif not prev and card.Parent == c then hum:UnequipTools() end
+			claiming = false
+		end)
+	end
+
+	task.spawn(function()
+		while H.alive do
+			local card = getCard()
+			if not card then
+				bInfo.Text = (state.bingoNotify or state.bingoAuto) and "Status: no Bingo Card" or ""
+				notified = nil
+			else
+				local g, marked = readGrid(card)
+				local line = g and findLine(g)
+				if line then
+					bInfo.Text = ('<font color="#78ff8c">BINGO!</font> %s · %d marked'):format(line, marked)
+					if state.bingoNotify and notified ~= card then
+						notified = card
+						pcall(function()
+							game:GetService("StarterGui"):SetCore("SendNotification", { Title = "TSC Hub", Text = "BINGO! Claim now (" .. line .. ")", Duration = 8 })
+						end)
+					end
+					if state.bingoAuto then claim(card) end
+				else
+					notified = nil
+					if g then bInfo.Text = ("Status: no bingo yet · %d/25 marked"):format(marked) end
+				end
+			end
+			task.wait(0.5)
 		end
 	end)
 end)()
