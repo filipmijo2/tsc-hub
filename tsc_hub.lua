@@ -4074,8 +4074,24 @@ end)
 -- Position (Ankerpunkt in Pixeln) wird unter state[key] gespeichert. Als H-Feld statt local (Hauptchunk am 200-Locals-Limit).
 H.movable = function(f, key)
 	state[key] = state[key] or sv(key, nil)
+	-- UDim2.fromOffset setzt den Scale-Anteil auf 0. Overlays, die unten/mittig verankert definiert sind (Y-Scale 1
+	-- bzw. X-Scale 0.5), landen dadurch ausserhalb des Bildschirms. Deshalb wird jede Position auf den sichtbaren
+	-- Bereich begrenzt: (x,y) ist die Lage des AnchorPoints in Pixeln, daraus die linke obere Ecke berechnen,
+	-- in den Viewport klemmen und zurueckrechnen. Mindestens 24 px bleiben immer sichtbar (zum Zurueckziehen).
+	local function setClamped(x, y)
+		local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+		local sz, ap = f.AbsoluteSize, f.AnchorPoint
+		local w = math.min(sz.X > 0 and sz.X or 200, vp.X)
+		local h = math.min(sz.Y > 0 and sz.Y or 24, vp.Y)
+		local left = math.clamp(x - w * ap.X, 0, math.max(vp.X - w, 0))
+		local top = math.clamp(y - h * ap.Y, 0, math.max(vp.Y - h, 24))
+		f.Position = UDim2.fromOffset(math.floor(left + w * ap.X + 0.5), math.floor(top + h * ap.Y + 0.5))
+	end
 	local p = state[key]
-	if type(p) == "table" and tonumber(p[1]) and tonumber(p[2]) then f.Position = UDim2.fromOffset(p[1], p[2]) end
+	if type(p) == "table" and tonumber(p[1]) and tonumber(p[2]) then
+		-- erst im naechsten Frame, damit AbsoluteSize durch AutomaticSize schon stimmt
+		task.defer(function() if f.Parent then setClamped(p[1], p[2]) end end)
+	end
 	local st = Instance.new("UIStroke"); st.Color = T.accent; st.Thickness = 1.5
 	st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; st.Enabled = false; st.Parent = f
 	local drag, sp, sm = false, nil, nil
@@ -4088,7 +4104,7 @@ H.movable = function(f, key)
 	con(UIS.InputChanged, function(i)
 		if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
 			local d = i.Position - sm
-			f.Position = UDim2.fromOffset(math.floor(sp.X + d.X), math.floor(sp.Y + d.Y))
+			setClamped(sp.X + d.X, sp.Y + d.Y)
 		end
 	end)
 	con(UIS.InputEnded, function(i)
