@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil" , "recloakEvery" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4329,18 +4329,31 @@ state.adonisOverlay = sv("adonisOverlay", false)
 end)()
 
 -- ================= INFECTED: INFINITE ABILITIES =================
--- Die Fähigkeiten des Infected (Cloak J, Hypnotize K) laufen über die globale Client-Tabelle `abilitySlots` im
--- Script Character.AbilityHandlerClient. Dauer und Abklingzeit zählt der CLIENT dort selbst herunter; das Ende
--- meldet erst der Client per FireServer("Uncloak"). Gemessen 27.09.: Duration festgehalten -> 24 s durchgehend
--- getarnt (Limit normal 10 s), der Server hat KEINEN eigenen Timer.
--- Zugriff über getsenv(Script) — NICHT über getgc(true): das baut eine Tabelle mit ~460k Objekten (15 ms) und
--- erzeugt im Dauerlauf so viel Müll, dass der GC das ganze Spiel ruckeln lässt.
+-- Cloak (J) / Hypnotize (K) hängen an der globalen Tabelle `abilitySlots` im Script Character.AbilityHandlerClient
+-- (Zugriff per getsenv — NICHT per Garbage-Collector-Scan, der baut ~460k Objekte und lässt das Spiel ruckeln).
+-- Zwei getrennte Timer: der CLIENT zählt Duration runter und schickt am Ende FireServer("Uncloak"), aber der SERVER
+-- hat seinen EIGENEN 10-s-Timer (gemessen 27.09.: Duration festhalten reicht NICHT, serverseitig läuft die Tarnung ab).
+-- Deshalb hier zweigleisig: Duration/Cooldown halten (Client schickt kein "Uncloak") UND vor Ablauf per
+-- Cloak.RemoteEvent:FireServer("Cloak") neu tarnen. Die Abklingzeit ist 0, ein Nachtriggern ist also erlaubt.
 state.infAbil = sv("infAbil", false)
+state.recloakEvery = sv("recloakEvery", 8)
 ;(function()
 	local S_ab = section(miscL, "Infected Abilities")
-	toggle(S_ab, "Infinite Cloak / Abilities", "infAbil", function() end)
+	toggle(S_ab, "Infinite Cloak / Abilities", "infAbil", function(on)
+		if not on then
+			-- sauber beenden: dem Server einmal "Uncloak" schicken
+			local c = lp.Character
+			local cl = c and c:FindFirstChild("Cloak")
+			local re = cl and cl:FindFirstChild("RemoteEvent")
+			if re then pcall(function() re:FireServer("Uncloak") end) end
+		end
+	end)
+	slider(S_ab, "Re-cloak every", 3, 9, state.recloakEvery, function(v)
+		state.recloakEvery = math.floor(v + 0.5)
+		return state.recloakEvery .. " s"
+	end, "recloakEvery")
 	local abInfo = info(S_ab, "")
-	info(S_ab, "Cloak = J, Hypnotize = K. Holds duration + cooldown; the end is only ever reported by the client.")
+	info(S_ab, "Cloak = J, Hypnotize = K. The server runs its own 10 s timer, so the cloak is re-triggered before it expires. Whether you stay invisible to OTHERS can only be confirmed in-game.")
 
 	local cachedScript, cachedSlots = nil, nil
 	local function getSlots()
@@ -4354,11 +4367,18 @@ state.infAbil = sv("infAbil", false)
 		if ok and type(env) == "table" and type(env.abilitySlots) == "table" then cachedSlots = env.abilitySlots end
 		return cachedSlots
 	end
+	local function cloakRemote()
+		local c = lp.Character
+		local cl = c and c:FindFirstChild("Cloak")
+		return cl and cl:FindFirstChild("RemoteEvent")
+	end
 
+	local lastCloak, recloaks = 0, 0
 	task.spawn(function()
 		while H.alive do
 			if state.infAbil then
 				local slots = getSlots()
+				local cloakActive = false
 				if slots then
 					local names = {}
 					for _, s in pairs(slots) do
@@ -4367,11 +4387,26 @@ state.infAbil = sv("infAbil", false)
 								if rawget(s, "MaxDuration") then s.Duration = s.MaxDuration end
 								if (rawget(s, "Cooldown") or 0) > 0 then s.Cooldown = 0 end
 								local o = rawget(s, "OriginScript")
-								if typeof(o) == "Instance" then names[#names + 1] = o.Name end
+								if typeof(o) == "Instance" then
+									names[#names + 1] = o.Name
+									if o.Name == "Cloak" and rawget(s, "Active") then cloakActive = true end
+								end
 							end)
 						end
 					end
-					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>'):format(#names > 0 and table.concat(names, ", ") or "?")
+					-- solange die Tarnung läuft: vor dem Server-Timeout neu triggern
+					if cloakActive and os.clock() - lastCloak >= state.recloakEvery then
+						local re = cloakRemote()
+						if re then
+							lastCloak = os.clock()
+							recloaks = recloaks + 1
+							pcall(function() re:FireServer("Cloak") end)
+						end
+					end
+					if not cloakActive then lastCloak = 0 end
+					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>%s'):format(
+						#names > 0 and table.concat(names, ", ") or "?",
+						cloakActive and ('  ·  re-cloaks: ' .. recloaks) or "")
 				else
 					abInfo.Text = typeof(getsenv) == "function" and "no abilities found (are you Infected?)" or "getsenv not available"
 				end
