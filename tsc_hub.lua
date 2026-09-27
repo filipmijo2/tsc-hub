@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed" , "dmgOff", "dmgShow" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4628,6 +4628,33 @@ state.clickTp = sv("clickTp", false); state.tpDetail = sv("tpDetail", false); st
 		line.CFrame = CFrame.new(bubble.Position - Vector3.new(0, h / 2, 0))
 		local my = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
 		bb.TextLabel.Text = ("%.0f studs away · %.0f above ground"):format(my and (bubble.Position - my.Position).Magnitude or 0, h)
+	end)
+end)()
+
+-- ================= ANTI AFK =================
+-- Ganz simpel: hat man 9 min lang KEINE Eingabe gemacht (Taste, Klick, Mausbewegung), kommt ein echter Mausklick.
+-- Mit Tool in der Hand Rechtsklick statt Linksklick (sonst würde man schießen/schlagen). Nur wenn Roblox im Vordergrund ist.
+-- Keine Remotes, kein VirtualUser, keine Roblox-Events angefasst — nur Eingaben mitzählen + echter Klick.
+state.antiAfk = sv("antiAfk", true)
+;(function()
+	toggle(S_world, "Anti AFK (click after 9 min idle)", "antiAfk", function() end)
+	local afkInfo = info(S_world, "")
+	local IDLE = 9 * 60
+	local lastInput, count = os.clock(), 0
+	con(UIS.InputBegan, function() lastInput = os.clock() end)
+	con(UIS.InputChanged, function(i) if i.UserInputType == Enum.UserInputType.MouseMovement then lastInput = os.clock() end end)
+	task.spawn(function()
+		while H.alive do
+			task.wait(5)
+			if state.antiAfk and os.clock() - lastInput >= IDLE and focused() then
+				local tool = lp.Character and lp.Character:FindFirstChildOfClass("Tool")
+				if tool and typeof(mouse2click) == "function" then mouse2click()
+				elseif not tool and typeof(mouse1click) == "function" then mouse1click() end
+				lastInput = os.clock()
+				count = count + 1
+				afkInfo.Text = ("clicked %d× (last %s)"):format(count, os.date("%H:%M"))
+			end
+		end
 	end)
 end)()
 
