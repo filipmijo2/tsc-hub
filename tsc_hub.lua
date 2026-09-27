@@ -37,12 +37,13 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
 	keys = { menu = kc(sv("keyMenu", "RightShift"), Enum.KeyCode.RightShift), vent = kc(sv("keyVent", "End"), Enum.KeyCode.End),
-		aim = kc(sv("keyAim", "MouseButton2"), Enum.UserInputType.MouseButton2) } }
+		aim = kc(sv("keyAim", "MouseButton2"), Enum.UserInputType.MouseButton2),
+		aura = kc(sv("keyAura", "F14"), Enum.KeyCode.F14) } }
 H.state = state
 
 -- ================= THEME / GUI-BAUKASTEN (Matcha-Stil) =================
@@ -843,6 +844,303 @@ state.nospread = sv("nospread", false)
 	if lp.Character then hookChar(lp.Character) end
 	con(lp.CharacterAdded, hookChar)
 	table.insert(H.conns, { Disconnect = function() state.nospread = false; pcall(apply) end })
+end)()
+
+-- Always Max Charge (Nahkampf mit Charge-Tabelle: Fäuste, Klauen, ...): LocalGunScript zählt die Haltedauer LOKAL hoch und
+-- bestimmt daraus die Stufe (LowCharge/MidCharge/MaxCharge); VisualGun.submitGunHit packt diese Stufe in das GunHit-Paket,
+-- der Server nimmt Schaden/Knockback aus seiner Tabelle für die gemeldete Stufe (Fäuste: 12 -> 37 Schaden). Einen
+-- "Charge-Start" meldet der Client nicht. Schwellen im GunData-Charge-Table (Modul + kopierte Tabellen via getgc) auf ~0
+-- -> jeder Schlag ist sofort Stufe 3. Originale werden gemerkt und beim Ausschalten zurückgesetzt. Keine Hooks/Remotes.
+state.maxcharge = sv("maxcharge", false)
+;(function()
+	local KEYS = { "LowCharge", "MidCharge", "MaxCharge" }
+	local FAST = { LowCharge = 0.001, MidCharge = 0.002, MaxCharge = 0.003 }
+	local orig = setmetatable({}, { __mode = "k" }) -- [Charge-Table] = {LowCharge=, MidCharge=, MaxCharge=}
+	-- Kopien, die das Spiel WÄHREND "an" erstellt (deepCopy beim Equip), haben kein Original -> per Waffen-Signatur
+	-- (Damage-Stufen) die Originalwerte merken, damit Ausschalten auch diese Kopien zurücksetzt.
+	local bySig = {}
+	local function sig(t)
+		local d = rawget(t, "Damage")
+		return type(d) == "table" and (tostring(d[1]) .. "," .. tostring(d[2]) .. "," .. tostring(d[3])) or "?"
+	end
+	local function isChargeTable(t)
+		return type(t) == "table" and type(rawget(t, "MaxCharge")) == "number" and type(rawget(t, "LowCharge")) == "number"
+			and type(rawget(t, "MidCharge")) == "number" and type(rawget(t, "Damage")) == "table"
+	end
+	local function patch(t, on)
+		if on then
+			if not orig[t] and rawget(t, "MaxCharge") > FAST.MaxCharge then
+				orig[t] = { LowCharge = rawget(t, "LowCharge"), MidCharge = rawget(t, "MidCharge"), MaxCharge = rawget(t, "MaxCharge") }
+				bySig[sig(t)] = bySig[sig(t)] or orig[t]
+			end
+			if orig[t] then for _, k in ipairs(KEYS) do rawset(t, k, FAST[k]) end end
+		elseif orig[t] then
+			for _, k in ipairs(KEYS) do rawset(t, k, orig[t][k]) end
+			orig[t] = nil
+		end
+	end
+	local function patchModules(container, on)
+		if not container then return end
+		for _, tool in ipairs(container:GetChildren()) do
+			local gd = tool:IsA("Tool") and tool:FindFirstChild("GunData")
+			if gd and gd:IsA("ModuleScript") then
+				local ok, m = pcall(require, gd)
+				if ok and type(m) == "table" and isChargeTable(rawget(m, "Charge")) then patch(m.Charge, on) end
+			end
+		end
+	end
+	local function apply()
+		local on = state.maxcharge
+		patchModules(lp:FindFirstChild("Backpack"), on)
+		patchModules(lp.Character, on)
+		if on then
+			if typeof(getgc) == "function" then
+				for _, v in ipairs(getgc(true)) do if isChargeTable(v) then patch(v, true) end end
+			end
+		else
+			for t in pairs(orig) do patch(t, false) end
+			-- während "an" entstandene Kopien (Schwellen noch auf FAST) über die Signatur zurücksetzen
+			if typeof(getgc) == "function" then
+				for _, v in ipairs(getgc(true)) do
+					if isChargeTable(v) and rawget(v, "MaxCharge") == FAST.MaxCharge then
+						local o = bySig[sig(v)]
+						if o then for _, k in ipairs(KEYS) do rawset(v, k, o[k]) end end
+					end
+				end
+			end
+		end
+	end
+	toggle(S_gun, "Always Max Charge (melee)", "maxcharge", function() pcall(apply) end)
+	local function hookChar(c)
+		con(c.ChildAdded, function(ch) if state.maxcharge and ch:IsA("Tool") then task.delay(0.3, function() pcall(apply) end) end end)
+	end
+	if lp.Character then hookChar(lp.Character) end
+	con(lp.CharacterAdded, hookChar)
+	table.insert(H.conns, { Disconnect = function() state.maxcharge = false; pcall(apply) end })
+end)()
+
+-- Kill Aura (Nahkampf, z. B. Fäuste): Taste GEHALTEN -> nächster Gegner in Reichweite wird anvisiert (echte Maus: abs im
+-- 3rd Person, rel im 1st Person, geglättet) und mit dem gewählten Abstand per echtem Linksklick geschlagen, solange die
+-- Taste gehalten wird. Sticky: bleibt auf dem Ziel, bis es tot/down/außer Reichweite ist. Den Schlag sendet der Spieleigene
+-- Ablauf (Richtung = Kamera-Strahl durch die Maus, Stufe = Charge). Für die Dauer der Aura: Charge-Schwellen ~0 (Stufe 3,
+-- bestätigt) und Range lokal auf Aura-Reichweite (UNGETESTET, ob der Server die Distanz prüft). Keine Hooks, keine Remotes.
+state.aura = sv("aura", false); state.auraRange = sv("auraRange", 10); state.auraTeam = sv("auraTeam", true)
+state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2); state.auraRing = sv("auraRing", true)
+;(function()
+	local S_aura = section(sub.Aimbot[2], "Kill Aura (Melee)")
+	local saved = setmetatable({}, { __mode = "k" }) -- [table] = {key = original}
+	local function set(t, k, v)
+		if table.isfrozen(t) then return end
+		saved[t] = saved[t] or {}
+		if saved[t][k] == nil then saved[t][k] = rawget(t, k) end
+		rawset(t, k, v)
+	end
+	local function isMeleeTable(t)
+		return type(t) == "table" and type(rawget(t, "Charge")) == "table" and type(rawget(t, "Range")) == "number"
+			and rawget(t, "MagSize") == 0
+	end
+	local function patchTable(t)
+		set(t, "Range", state.auraRange + 1)
+		-- Windup = rein lokale Pause zwischen Loslassen und Schlag (task.wait(u14.Windup or 0.07)); Server sieht sie nicht
+		if type(rawget(t, "Windup")) == "number" then set(t, "Windup", 0.01) end
+		local c = rawget(t, "Charge")
+		if type(rawget(c, "MaxCharge")) == "number" then
+			set(c, "LowCharge", 0.001); set(c, "MidCharge", 0.002); set(c, "MaxCharge", 0.003)
+		end
+	end
+	local function patchAll()
+		for _, cont in ipairs({ lp:FindFirstChild("Backpack"), lp.Character }) do
+			if cont then
+				for _, tool in ipairs(cont:GetChildren()) do
+					local gd = tool:IsA("Tool") and tool:FindFirstChild("GunData")
+					if gd and gd:IsA("ModuleScript") then
+						local ok, m = pcall(require, gd)
+						if ok and isMeleeTable(m) then patchTable(m) end
+					end
+				end
+			end
+		end
+		if typeof(getgc) == "function" then
+			for _, v in ipairs(getgc(true)) do if isMeleeTable(v) then patchTable(v) end end
+		end
+	end
+	local function restoreAll()
+		for t, kv in pairs(saved) do for k, v in pairs(kv) do pcall(rawset, t, k, v) end end
+		table.clear(saved)
+	end
+	toggle(S_aura, "Enabled", "aura", function(on) if on then pcall(patchAll) else restoreAll() end end, "aura")
+	slider(S_aura, "Range", 6, 14, state.auraRange, function(v)
+		state.auraRange = math.floor(v + 0.5)
+		if state.aura then pcall(patchAll) end
+		return state.auraRange .. " studs"
+	end, "auraRange")
+	slider(S_aura, "Hit Delay", 0.2, 1.5, state.auraDelay, function(v)
+		state.auraDelay = math.floor(v * 20 + 0.5) / 20; state.auraDelay2 = state.auraDelay; return ("%.2f s"):format(state.auraDelay) end, "auraDelay")
+	slider(S_aura, "Smoothing", 1, 10, state.auraSmooth, function(v)
+		state.auraSmooth = math.floor(v + 0.5); state.auraSmooth2 = state.auraSmooth; return tostring(state.auraSmooth) end, "auraSmooth")
+	toggle(S_aura, "Ignore Teammates", "auraTeam", function() end)
+	toggle(S_aura, "Show Range Circle", "auraRing", function() end)
+	local auraInfo = info(S_aura, "Hold the key with a melee weapon (fists): hits the nearest enemy in range with full charge until you let go. Range above 6 is untested server-side.")
+
+	local function meleeTool()
+		local c = lp.Character
+		local t = c and c:FindFirstChildOfClass("Tool")
+		local gd = t and t:FindFirstChild("GunData")
+		if not gd then return end
+		local ok, m = pcall(require, gd)
+		if ok and type(m) == "table" and type(m.Charge) == "table" then return t end
+	end
+	local function bodyOf(p)
+		local c = p and p.Character
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		local part = c and (c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("HumanoidRootPart"))
+		if not (part and hum and hum.Health > 0 and not c:GetAttribute("Down") and c:IsDescendantOf(workspace)) then return end
+		return part
+	end
+	local function distTo(part)
+		local my = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+		return my and (part.Position - my.Position).Magnitude or math.huge
+	end
+	local function validTarget(p, slack)
+		if not p or p.Parent ~= Players then return end
+		if state.auraTeam and p.Team ~= nil and p.Team == lp.Team then return end
+		local part = bodyOf(p)
+		if part and distTo(part) <= state.auraRange + (slack or 0) then return part end
+	end
+	local function findTarget()
+		local best, bestPart, bd = nil, nil, math.huge
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= lp then
+				local part = validTarget(p, 0)
+				if part then
+					local d = distTo(part)
+					if d < bd then best, bestPart, bd = p, part, d end
+				end
+			end
+		end
+		return best, bestPart
+	end
+	-- ein geglätteter Zielschritt: 3rd Person -> Cursor Richtung Ziel, 1st Person (Maus zentriert) -> Kamera per mousemoverel
+	local function aimStep(part)
+		local sp = cam:WorldToViewportPoint(part.Position)
+		local k = 1 / math.max(state.auraSmooth, 1)
+		-- Toleranz = ~60 % des Torso-Radius auf dem Bildschirm (nah dran reicht "irgendwo auf dem Körper")
+		local edge = cam:WorldToViewportPoint(part.Position + cam.CFrame.RightVector * 1)
+		local tol = math.max(12, (Vector2.new(edge.X, edge.Y) - Vector2.new(sp.X, sp.Y)).Magnitude * 0.6)
+		if UIS.MouseBehavior == Enum.MouseBehavior.LockCenter then
+			local c = cam.ViewportSize / 2
+			local dx, dy = sp.X - c.X, sp.Y - c.Y
+			if sp.Z < 0 then dx, dy = -dx, -dy end
+			local mx, my = dx * k, dy * k
+			if math.abs(mx) < 1 then mx = dx end
+			if math.abs(my) < 1 then my = dy end
+			if typeof(mousemoverel) == "function" then mousemoverel(mx, my) end
+			return sp.Z > 0 and math.abs(dx) < tol and math.abs(dy) < tol
+		end
+		if sp.Z <= 0 then return false end
+		local m = UIS:GetMouseLocation()
+		local d = Vector2.new(sp.X, sp.Y) - m
+		local step = d.Magnitude * k < 1 and d or d * k
+		mousemoveabs(math.floor(m.X + step.X + 0.5), math.floor(m.Y + step.Y + 0.5))
+		return d.Magnitude < tol
+	end
+
+	local target = nil
+	local busy = false
+	local function run()
+		if busy then return end
+		busy = true
+		pcall(patchAll) -- frisch kopierte Tabellen (Equip) mit erfassen
+		local hits, lastHit = 0, 0
+		while H.alive and state.aura and state.keys.aura and keyHeld(state.keys.aura) and focused() and meleeTool() do
+			-- Sticky: einmal gelockt bleibt das Ziel, solange die Taste gehalten wird; Wechsel nur bei tot/down/weg oder
+			-- weiter als 2x Reichweite. Außerhalb der Reichweite wird weiter mitgezielt, aber nicht geschlagen.
+			local part = validTarget(target, state.auraRange) -- Toleranz = Reichweite -> Lock hält bis 2x Reichweite
+			if not part then target, part = findTarget() end
+			if not target then
+				auraInfo.Text = "Status: nobody within " .. state.auraRange .. " studs"
+				RunService.RenderStepped:Wait()
+			else
+				local onTarget = aimStep(part)
+				local inRange = distTo(part) <= state.auraRange
+				if not inRange then
+					auraInfo.Text = ('Status: locked <font color="#d266b4">%s</font> · out of range (%.0f)'):format(target.Name, distTo(part))
+				end
+				if inRange and onTarget and os.clock() - lastHit >= state.auraDelay then
+					mouse1press()
+					RunService.RenderStepped:Wait()
+					mouse1release()
+					lastHit = os.clock()
+					hits = hits + 1
+					auraInfo.Text = ('Status: <font color="#d266b4">%s</font> · %d hits'):format(target.Name, hits)
+					RunService.RenderStepped:Wait()
+				else
+					RunService.RenderStepped:Wait()
+				end
+			end
+		end
+		target = nil
+		busy = false
+	end
+	con(UIS.InputBegan, function(i)
+		if state.aura and state.keys.aura and keyMatch(i, state.keys.aura) and not UIS:GetFocusedTextBox() then
+			if typeof(mouse1press) ~= "function" then auraInfo.Text = "Status: mouse1press missing"; return end
+			task.spawn(run)
+		end
+	end)
+
+	-- Reichweiten-Kreis am Boden (wie der FOV-Kreis), pink sobald ein Gegner drin ist
+	local ringGui = Instance.new("ScreenGui")
+	ringGui.Name = "TSC_AURA"; ringGui.ResetOnSpawn = false; ringGui.IgnoreGuiInset = true; ringGui.DisplayOrder = 997
+	ringGui.Parent = CoreGui
+	table.insert(H.conns, { Disconnect = function() ringGui:Destroy() end })
+	local SEG = 48
+	local segs = {}
+	for i = 1, SEG do
+		local f = Instance.new("Frame"); f.BorderSizePixel = 0; f.AnchorPoint = Vector2.new(0.5, 0.5); f.Visible = false
+		f.Parent = ringGui
+		segs[i] = f
+	end
+	RunService:BindToRenderStep("TSC_AURA_RING", Enum.RenderPriority.Camera.Value + 3, function()
+		local my = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+		local show = state.aura and state.auraRing and my and meleeTool() ~= nil
+		if not show then
+			for i = 1, SEG do segs[i].Visible = false end
+			return
+		end
+		local inside = target ~= nil or (findTarget()) ~= nil
+		local col = inside and Color3.fromRGB(255, 60, 110) or Color3.fromRGB(0, 255, 255)
+		local base = my.Position - Vector3.new(0, 2.9, 0)
+		local r = state.auraRange
+		local prev, prevOk
+		for i = 0, SEG do
+			local a = (i % SEG) / SEG * math.pi * 2
+			local sp = cam:WorldToViewportPoint(base + Vector3.new(math.cos(a) * r, 0, math.sin(a) * r))
+			local p2, ok = Vector2.new(sp.X, sp.Y), sp.Z > 0
+			if i > 0 then
+				local f = segs[i]
+				if ok and prevOk then
+					local d = p2 - prev
+					f.Position = UDim2.fromOffset((p2.X + prev.X) / 2, (p2.Y + prev.Y) / 2)
+					f.Size = UDim2.fromOffset(d.Magnitude + 1, 2)
+					f.Rotation = math.deg(math.atan2(d.Y, d.X))
+					f.BackgroundColor3 = col; f.BackgroundTransparency = 0.25
+					f.Visible = true
+				else
+					f.Visible = false
+				end
+			end
+			prev, prevOk = p2, ok
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() RunService:UnbindFromRenderStep("TSC_AURA_RING") end })
+
+	local function hookChar(c)
+		con(c.ChildAdded, function(ch) if state.aura and ch:IsA("Tool") then task.delay(0.3, function() pcall(patchAll) end) end end)
+	end
+	if lp.Character then hookChar(lp.Character) end
+	con(lp.CharacterAdded, hookChar)
+	table.insert(H.conns, { Disconnect = function() restoreAll() end })
 end)()
 
 task.spawn(function()
@@ -3966,7 +4264,7 @@ task.spawn(function()
 	while H.alive do
 		local t = {}
 		for _, k in ipairs(SAVE_KEYS) do t[k] = state[k] end
-		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name
+		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name
 		t.guiX = main.Position.X.Offset; t.guiY = main.Position.Y.Offset; t.guiVisible = main.Visible
 		local ok, js = pcall(function() return HttpService:JSONEncode(t) end)
 		if ok and js ~= last then
