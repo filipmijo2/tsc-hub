@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed" , "dmgOff", "dmgShow" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4733,6 +4733,101 @@ state.bingoNotify = sv("bingoNotify", true); state.bingoAuto = sv("bingoAuto", f
 	end)
 end)()
 
+-- ================= DAMAGE ZONES =================
+-- 63 unsichtbare Parts in der Map (Transparency=1) mit Attribut `Damage` (10–20 harmlos, 120, bis 9999/50000 =
+-- Instant-Kill) und `Debounce` (Sekunden zwischen Treffern), z. B. Map.S2_OpenArea.zapper. Schaden laeuft ueber
+-- Touch, und Touches des eigenen (client-owned) Characters meldet der CLIENT -> CanTouch=false lokal = kein Touch
+-- = kein Schaden. CanCollide bleibt unberuehrt, damit man nicht durch den Boden faellt. Alles reversibel.
+-- Sichtbarmachen ist rein lokal (Transparency/Color an server-eigenen Parts repliziert nicht).
+state.dmgOff = sv("dmgOff", false)
+state.dmgShow = sv("dmgShow", false)
+;(function()
+	local S_dz = section(visR, "Damage Zones")
+	local touched = {}   -- [part] = originales CanTouch
+	local shown = {}     -- [part] = {Transparency, Color, Material}
+	local seen = {}      -- [part] = true
+
+	local function isDmg(d) return d:IsA("BasePart") and d:GetAttribute("Damage") ~= nil end
+	local function colFor(dmg)
+		if dmg >= 1000 then return Color3.fromRGB(255, 0, 60) end      -- Instant-Kill
+		if dmg >= 100 then return Color3.fromRGB(255, 110, 0) end      -- schwer
+		if dmg >= 40 then return Color3.fromRGB(255, 200, 0) end       -- mittel
+		return Color3.fromRGB(120, 200, 255)                            -- leicht
+	end
+	local function applyOne(d)
+		local dmg = tonumber(d:GetAttribute("Damage")) or 0
+		if state.dmgOff then
+			if touched[d] == nil then touched[d] = d.CanTouch end
+			if d.CanTouch then d.CanTouch = false end
+		elseif touched[d] ~= nil then
+			d.CanTouch = touched[d]; touched[d] = nil
+		end
+		if state.dmgShow then
+			if shown[d] == nil then shown[d] = { d.Transparency, d.Color, d.Material } end
+			d.Transparency = 0.55
+			d.Color = colFor(dmg)
+			d.Material = Enum.Material.Neon
+		elseif shown[d] ~= nil then
+			local o = shown[d]
+			d.Transparency, d.Color, d.Material = o[1], o[2], o[3]
+			shown[d] = nil
+		end
+	end
+	local function sweep()
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if isDmg(d) then seen[d] = true pcall(applyOne, d) end
+		end
+	end
+	local function restoreAll()
+		for d in pairs(touched) do if d.Parent then pcall(function() d.CanTouch = touched[d] end) end end
+		touched = {}
+		for d, o in pairs(shown) do
+			if d.Parent then pcall(function() d.Transparency, d.Color, d.Material = o[1], o[2], o[3] end) end
+		end
+		shown = {}
+	end
+
+	toggle(S_dz, "No Damage (local)", "dmgOff", function() pcall(sweep) end)
+	toggle(S_dz, "Show Damage Zones", "dmgShow", function() pcall(sweep) end)
+	local dzInfo = info(S_dz, "")
+	info(S_dz, '<font color="#ff003c">red = instant kill</font> · <font color="#ff6e00">orange</font> · <font color="#ffc800">yellow</font> · <font color="#78c8ff">light</font>  — these parts are invisible in the game; collision is left alone.')
+
+	-- neu gestreamte Zonen mitnehmen
+	con(workspace.DescendantAdded, function(d)
+		if (state.dmgOff or state.dmgShow) and isDmg(d) then seen[d] = true task.defer(function() pcall(applyOne, d) end) end
+	end)
+
+	task.spawn(function()
+		while H.alive do
+			if state.dmgOff or state.dmgShow then
+				pcall(sweep)
+				local n, lethal, near, nd = 0, 0, nil, math.huge
+				local my = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+				for d in pairs(seen) do
+					if d.Parent then
+						n = n + 1
+						local dmg = tonumber(d:GetAttribute("Damage")) or 0
+						if dmg >= 1000 then lethal = lethal + 1 end
+						if my then
+							local dist = (d.Position - my.Position).Magnitude
+							if dist < nd then nd = dist; near = dmg end
+						end
+					else
+						seen[d] = nil; touched[d] = nil; shown[d] = nil
+					end
+				end
+				dzInfo.Text = ('%d zones loaded (%d lethal)%s%s'):format(n, lethal,
+					near and ('  ·  nearest: ' .. math.floor(nd) .. 'm dmg ' .. near) or "",
+					state.dmgOff and '  ·  <font color="#78ff8c">disarmed</font>' or "")
+			elseif dzInfo.Text ~= "" then
+				dzInfo.Text = ""
+				restoreAll()
+			end
+			task.wait(2)
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() pcall(restoreAll) end })
+end)()
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
 local CFG_FILE = "tsc_hub_config.json"
