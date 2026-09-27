@@ -4116,6 +4116,21 @@ H.movable = function(f, key)
 		local open = main.Visible
 		if st.Enabled ~= open then st.Enabled = open; f.Active = open end
 		if not open then drag = false end
+		-- Laufende Korrektur anhand der ECHTEN Bildschirmposition: reicht nicht, die Position einmal beim Laden zu
+		-- klemmen, weil AutomaticSize das Overlay nachtraeglich wachsen laesst und unten verankerte Overlays dadurch
+		-- oben aus dem Bild wandern. Hier wird nur nachgeschoben, wenn es wirklich rausragt.
+		local ap, sz = f.AbsolutePosition, f.AbsoluteSize
+		local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+		local dx, dy = 0, 0
+		if sz.X > 0 and sz.X <= vp.X then
+			if ap.X < 0 then dx = -ap.X elseif ap.X + sz.X > vp.X then dx = vp.X - (ap.X + sz.X) end
+		end
+		if sz.Y > 0 and sz.Y <= vp.Y then
+			if ap.Y < 0 then dy = -ap.Y elseif ap.Y + sz.Y > vp.Y then dy = vp.Y - (ap.Y + sz.Y) end
+		end
+		if math.abs(dx) >= 1 or math.abs(dy) >= 1 then
+			f.Position = f.Position + UDim2.fromOffset(math.floor(dx + 0.5), math.floor(dy + 0.5))
+		end
 	end)
 end
 
