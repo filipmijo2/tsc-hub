@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -364,7 +364,10 @@ local S_plInfo = section(plR, "Info")
 -- Hook-frei (namecall-Hook = Kick!), keine Remotes: nur GUI lesen + echten Cursor (mousemoveabs) setzen.
 -- Heartbeat läuft nach dem Green-Update; Lag wird über Marker.X vs. eigene Befehle gemessen, Vorhersage prallt ab.
 -- M1 hält man selbst.
+-- "Lock Bar To Mouse": statt den Cursor zu bewegen (2-6 Frames Eingabe-Lag -> Vorhersage wackelt) wird der lokale Frame so
+-- verschoben, dass die Maus genau in der Mitte von Green liegt. u8 hängt nur von MausX und Frame.AbsX ab -> kein Lag.
 state.vent = sv("vent", true); state.ventPred = sv("ventPred", true); state.ventLog = sv("ventLog", true); state.ventBias = sv("ventBias", 0)
+state.ventLock = sv("ventLock", true)
 local V = { hist = {}, lagF = 1, prevP = nil, prevW = 0, dir = 1, mult = 1, open = false, st = nil, wasRed = false, last = "-" }
 local VENT_LOG, MAX_LAG = "_autovent_log.txt", 6
 local focused = (typeof(isrbxactive) == "function") and isrbxactive or function() return true end
@@ -402,6 +405,7 @@ con(RunService.Heartbeat, function(dt)
 	local fr, gr, mk = ventParts()
 	if not state.vent or not fr then
 		if V.open then ventFlush(); V.hist = {}; V.prevP = nil; V.open = false end
+		if V.origPos then pcall(function() V.frame.Position = V.origPos end); V.origPos = nil end
 		return
 	end
 	if not V.open then
@@ -450,6 +454,17 @@ con(RunService.Heartbeat, function(dt)
 	end
 	V.prevP, V.prevW = p, w
 
+	if state.ventLock then
+		-- Heartbeat = nach dem Green-Update; der Check im nächsten Frame nutzt genau dieses Green
+		V.frame = fr
+		V.origPos = V.origPos or fr.Position
+		local want = UIS:GetMouseLocation().X - (p + w * 0.5) * fr.AbsoluteSize.X
+		local o = V.origPos
+		local cur = fr.Position
+		fr.Position = UDim2.new(o.X.Scale, cur.X.Offset + (want - fr.AbsolutePosition.X), o.Y.Scale, o.Y.Offset)
+		return
+	end
+
 	-- Lag messen: welchen unserer letzten Befehle hat das Spiel gerade gelesen?
 	if mk and #V.hist >= 2 then
 		local m = mk.Position.X.Scale
@@ -475,6 +490,7 @@ con(RunService.Heartbeat, function(dt)
 end)
 
 toggle(S_vent, "Enabled", "vent", function() end, "vent")
+toggle(S_vent, "Lock Bar To Mouse (no lag)", "ventLock", function() end)
 toggle(S_vent, "Prediction", "ventPred", function() end)
 slider(S_vent, "Lead Adjust (frames)", -2, 2, state.ventBias, function(v)
 	state.ventBias = math.floor(v * 4 + 0.5) / 4
@@ -2154,21 +2170,32 @@ end)
 -- ================= STAFF-RADAR =================
 -- Gruppe 11577231: Rang >= 90 = Staff (External Command, Intern, Dept-Admin, Contractor, Devs);
 -- plrUniqueTag_txt-Attribut = Staff-Tag (QA etc.). Panel oben mittig, immer sichtbar (auch wenn Hub zu).
+-- Moderatoren/Admins stehen NICHT in der Hauptgruppe (dort oft nur L-3 o. ä.), sondern in "TSC Moderation Team" 33326090:
+-- Rang >= 190 = Junior Moderators bis Holder (Staff); 170 Intelligence Access / 175 Forced LOA / 180 Suspended nur als Info.
 local GROUP_ID, STAFF_MIN = 11577231, 90
+H.MOD = { group = 33326090, min = 190, info = 170 } -- als H-Feld: Hauptchunk am 200-Locals-Limit
 local rankCache = {} -- [userId] = {rank=, role=}
 local function fetchRank(p)
 	if rankCache[p.UserId] then return end
-	rankCache[p.UserId] = { rank = -1, role = "?" }
+	rankCache[p.UserId] = { rank = -1, role = "?", mrank = -1 }
 	task.spawn(function()
 		local ok, r = pcall(function() return p:GetRankInGroup(GROUP_ID) end)
 		local ok2, role = pcall(function() return p:GetRoleInGroup(GROUP_ID) end)
-		rankCache[p.UserId] = { rank = ok and r or -1, role = ok2 and role or "?" }
+		local ok3, mr = pcall(function() return p:GetRankInGroup(H.MOD.group) end)
+		local mrole
+		if ok3 and mr >= H.MOD.info then
+			local ok4, x = pcall(function() return p:GetRoleInGroup(H.MOD.group) end)
+			mrole = ok4 and x or "?"
+		end
+		rankCache[p.UserId] = { rank = ok and r or -1, role = ok2 and role or "?", mrank = ok3 and mr or -1, mrole = mrole }
 	end)
 end
 local function staffInfo(p)
 	local rc = rankCache[p.UserId]
 	local tag = p:GetAttribute("plrUniqueTag_txt")
+	if rc and rc.mrank >= H.MOD.min then return "Mod Team: " .. rc.mrole .. (tag and (" | " .. tag) or ""), true end
 	if rc and rc.rank >= STAFF_MIN then return rc.role .. (tag and (" | " .. tag) or ""), true end
+	if rc and rc.mrank >= H.MOD.info then return "Mod Team: " .. rc.mrole .. (tag and (" | " .. tag) or ""), false end
 	if tag and tag ~= "" then return tostring(tag), false end
 	return nil
 end
@@ -2188,7 +2215,7 @@ pad.PaddingLeft = UDim.new(0, 8); pad.PaddingRight = UDim.new(0, 8); pad.Padding
 state.staff = sv("staff", true)
 toggle(S_staff, "Enabled", "staff", function() end)
 local staffSummary = info(S_staff, "No staff detected.")
-info(S_staff, "Group rank ≥ 90 or staff tag. Panel stays visible at the top even with the menu closed.")
+info(S_staff, "TSC group rank ≥ 90, Moderation Team rank ≥ 190, or staff tag. Panel stays visible at the top even with the menu closed.")
 
 local staffObjs = {} -- [player] = {bb=, lbl=, box=}
 local function clearStaffObj(p)
@@ -2236,7 +2263,7 @@ task.spawn(function()
 					if dist and c and c.Parent and dist < 60 and status ~= "sichtbar" then col = "#ff00ff" end
 					if p:GetAttribute("InMenu") then status = status .. " [InMenu]" end
 					lines[#lines + 1] = ('<font color="%s">%s %s</font>  <font color="#9ab">%s</font>  %s%s'):format(
-						isStaff and "#ffcc40" or "#8fd0ff", isStaff and "★" or "•", esc(p.Name), esc(sinfo),
+						isStaff and "#ffcc40" or "#8fd0ff", isStaff and "★" or "•", esc(p.Name .. (p.DisplayName ~= p.Name and (" (" .. p.DisplayName .. ")") or "")), esc(sinfo),
 						('<font color="%s">%s</font>'):format(col, status), dist and ("  " .. dist .. "m") or "")
 					-- Welt-Marker (auch für unsichtbare): Box am Root + Label, ignoriert ESP-Reichweite
 					if r and c.Parent then
@@ -2257,7 +2284,7 @@ task.spawn(function()
 						o.bb.Adornee = r; o.box.Adornee = r
 						o.box.Color3 = isStaff and Color3.fromRGB(255, 200, 40) or Color3.fromRGB(120, 200, 255)
 						o.lbl.TextColor3 = o.box.Color3
-						o.lbl.Text = (isStaff and "★ STAFF " or "• ") .. p.Name .. (status ~= "sichtbar" and (" [" .. status .. "]") or "")
+						o.lbl.Text = (isStaff and "★ STAFF " or "• ") .. p.Name .. (p.DisplayName ~= p.Name and (" (" .. p.DisplayName .. ")") or "") .. (status ~= "sichtbar" and (" [" .. status .. "]") or "")
 					else
 						clearStaffObj(p)
 					end
