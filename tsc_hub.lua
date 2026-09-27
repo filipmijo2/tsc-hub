@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4214,6 +4214,118 @@ state.fakeTranslator = sv("fakeTranslator", false)
 	-- Backpack wird bei Respawn neu erzeugt -> regelmäßig nachziehen
 	task.spawn(function() while H.alive do pcall(ensure) task.wait(1) end end)
 	table.insert(H.conns, { Disconnect = function() state.fakeTranslator = false; pcall(ensure) end })
+end)()
+
+-- ================= ADONIS MONITOR =================
+-- Adonis (Admin-System) schickt Server->Client-Aufrufe im Klartext über sein GUID-Remote in ReplicatedStorage
+-- (RemoteEvent mit Kind "__FUNCTION"): Args = {Sent, Mode}, Key, Befehlsname, Argumente (z. B. "NewCape", Durchsagen,
+-- Hinweise, Notifications). Dazu Chat-Befehle mit ":" / ";" aus TextChatService. Nur Zuhören (Listener, kein Hook).
+-- Log im Tab + Overlay + dauerhaft in workspace/tsc_adonis_log.txt (gepuffert, alle 3 s).
+state.adonisMon = sv("adonisMon", true)
+state.adonisOverlay = sv("adonisOverlay", false)
+;(function()
+	local S_ad = section(plR, "Adonis Monitor")
+	local LOG_FILE = "tsc_adonis_log.txt"
+	local log, fileBuf = {}, {}
+	local MAXLOG = 60
+	local function esc(s) return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
+	local function ser(v, d)
+		d = d or 0
+		local tv = typeof(v)
+		if tv == "Instance" then return "<" .. v.Name .. ">" end
+		if tv == "string" then return '"' .. v:sub(1, 120) .. '"' end
+		if tv ~= "table" then return tostring(v) end
+		if d > 2 then return "{..}" end
+		local t, n = {}, 0
+		for k, x in pairs(v) do n = n + 1 if n > 8 then t[#t + 1] = "…" break end t[#t + 1] = tostring(k) .. "=" .. ser(x, d + 1) end
+		return "{" .. table.concat(t, ", ") .. "}"
+	end
+	local function add(kind, text, hot)
+		local e = { t = os.date("%H:%M:%S"), kind = kind, text = text, hot = hot }
+		log[#log + 1] = e
+		while #log > MAXLOG do table.remove(log, 1) end
+		fileBuf[#fileBuf + 1] = ("[%s] %s %s"):format(e.t, kind, text)
+	end
+	toggle(S_ad, "Monitor Adonis + :/; Commands", "adonisMon", function() end)
+	toggle(S_ad, "Adonis Overlay", "adonisOverlay", function() end)
+	local adInfo = info(S_ad, "")
+	info(S_ad, "Logged permanently to workspace/" .. LOG_FILE)
+
+	-- Adonis-Remote finden: GUID-Name + Kind "__FUNCTION"
+	local function findAdonisRemote()
+		for _, c in ipairs(game:GetService("ReplicatedStorage"):GetChildren()) do
+			if c:IsA("RemoteEvent") and c:FindFirstChild("__FUNCTION") and c.Name:match("^%x+%-%x+%-%x+%-%x+%-%x+$") then return c end
+		end
+	end
+	local adRemote = findAdonisRemote()
+	if adRemote then
+		con(adRemote.OnClientEvent, function(...)
+			if not state.adonisMon then return end
+			local a = { ... }
+			local cmd = a[3]
+			local rest = {}
+			for i = 4, select("#", ...) do rest[#rest + 1] = ser(a[i]) end
+			local name = type(cmd) == "string" and cmd or ser(cmd)
+			-- Durchsagen / Nachrichten / Kicks / Teleports hervorheben
+			local l = name:lower()
+			local hot = l:find("message") or l:find("hint") or l:find("notif") or l:find("kick") or l:find("ban")
+				or l:find("tele") or l:find("warn") or l:find("announce") or l:find("countdown") or l:find("function")
+			add("ADONIS", name .. (#rest > 0 and ("  " .. table.concat(rest, " | ")) or ""), hot)
+		end)
+	else
+		add("INFO", "Adonis remote not found", false)
+	end
+
+	-- Chat-Befehle mit ":" oder ";"
+	con(game:GetService("TextChatService").MessageReceived, function(msg)
+		if not state.adonisMon then return end
+		local text = msg.Text or ""
+		local first = text:sub(1, 1)
+		if first ~= ":" and first ~= ";" then return end
+		local src = msg.TextSource
+		local pl = src and Players:GetPlayerByUserId(src.UserId)
+		local staff = pl and select(2, pcall(staffInfo, pl))
+		local who = pl and pl.Name or (src and src.Name) or "?"
+		local team = pl and pl.Team and pl.Team.Name or ""
+		add("CMD", ("%s%s [%s]: %s"):format(staff and "★ " or "", who, team, text), true)
+	end)
+
+	local ov = Instance.new("TextLabel")
+	ov.AnchorPoint = Vector2.new(0, 1); ov.Position = UDim2.new(0, 12, 1, -300); ov.Size = UDim2.fromOffset(520, 0)
+	ov.AutomaticSize = Enum.AutomaticSize.Y; ov.BackgroundColor3 = Color3.fromRGB(10, 10, 12); ov.BackgroundTransparency = 0.35
+	ov.Font = Enum.Font.Code; ov.TextSize = 13; ov.RichText = true; ov.TextWrapped = true; ov.TextColor3 = Color3.fromRGB(230, 230, 230)
+	ov.TextXAlignment = Enum.TextXAlignment.Left; ov.TextYAlignment = Enum.TextYAlignment.Top; ov.Visible = false; ov.Parent = gui
+	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
+	local pad = Instance.new("UIPadding", ov); pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
+	pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+	local function lines(n)
+		local t = {}
+		for i = math.max(1, #log - n + 1), #log do
+			local m = log[i]
+			local col = m.kind == "CMD" and "#8fd0ff" or (m.hot and "#ff6b6b" or "#f5a8de")
+			t[#t + 1] = ('<font color="#767676">[%s]</font> <font color="%s">%s</font> %s'):format(m.t, col, m.kind, esc(m.text))
+		end
+		return table.concat(t, "\n")
+	end
+	local lastFlush = os.clock()
+	task.spawn(function()
+		while H.alive do
+			if state.adonisMon then
+				adInfo.Text = #log > 0 and lines(16) or "waiting for Adonis events / commands..."
+				ov.Text = '<font color="#f5a8de">ADONIS</font>\n' .. (#log > 0 and lines(8) or "...")
+				ov.Visible = state.adonisOverlay
+			else
+				adInfo.Text = ""; ov.Visible = false
+			end
+			if #fileBuf > 0 and os.clock() - lastFlush > 3 then
+				lastFlush = os.clock()
+				local chunk = table.concat(fileBuf, "\n") .. "\n"
+				fileBuf = {}
+				if isfile(LOG_FILE) then pcall(appendfile, LOG_FILE, chunk) else pcall(writefile, LOG_FILE, chunk) end
+			end
+			task.wait(0.5)
+		end
+	end)
 end)()
 
 -- ================= CONFIG =================
