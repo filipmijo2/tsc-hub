@@ -4360,11 +4360,15 @@ state.infAbil = sv("infAbil", false)
 			if typeof(o) == "Instance" and o.Name == "Cloak" then return s end
 		end
 	end
-	local busy = false
+	-- wantCloak: Spieler will getarnt sein. Endet die Tarnung ohne Tastendruck (vereinzelt beobachtet), wird neu getarnt —
+	-- erst nach >= 1.2 s, damit das Enttarnen fertig ist (sonst merkt sich CloakPlayer eine halbe Transparenz).
+	local busy, wantCloak, lastTry, hookedEv = false, false, 0, nil
 	local function setCloak(on)
 		local s = cloakSlot()
 		local ev = s and rawget(s, "Event")
 		if not ev or busy then return end
+		wantCloak = on
+		lastTry = os.clock()
 		if (rawget(s, "Active") == true) == on then return end
 		busy = true
 		task.spawn(function()
@@ -4379,7 +4383,7 @@ state.infAbil = sv("infAbil", false)
 		end)
 	end
 	toggle(S_ab, "Infinite Cloak / Abilities", "infAbil", function(on)
-		if not on then setCloak(false) end
+		if not on then setCloak(false); wantCloak = false end
 	end, "cloak")
 	local abInfo = info(S_ab, "")
 	info(S_ab, "Press the key to cloak, press it again to uncloak — no time limit, no cooldown. J still works too. Hypnotize (K) also has no cooldown while this is on.")
@@ -4411,6 +4415,14 @@ state.infAbil = sv("infAbil", false)
 							end)
 						end
 					end
+					-- J während der Tarnung = bewusst enttarnen (nicht wieder tarnen)
+					local cs = cloakSlot()
+					local ev = cs and rawget(cs, "Event")
+					if ev and ev ~= hookedEv then
+						hookedEv = ev; wantCloak = false
+						con(ev.Event, function(n) if n == "PressedWhileActive" then wantCloak = false end end)
+					end
+					if wantCloak and cs and not cloaked and not busy and os.clock() - lastTry > 1.2 then setCloak(true) end
 					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>%s'):format(
 						#names > 0 and table.concat(names, ", ") or "?",
 						cloaked and '  ·  <font color="#d266b4">CLOAKED</font>' or "")
