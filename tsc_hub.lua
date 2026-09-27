@@ -4353,7 +4353,7 @@ state.recloakEvery = sv("recloakEvery", 8)
 		return state.recloakEvery .. " s"
 	end, "recloakEvery")
 	local abInfo = info(S_ab, "")
-	info(S_ab, "Cloak = J, Hypnotize = K. The server runs its own 10 s timer, so the cloak is re-triggered before it expires. Whether you stay invisible to OTHERS can only be confirmed in-game.")
+	info(S_ab, "Cloak = J, Hypnotize = K. The server runs its own 10 s timer, so the cloak is re-triggered before it expires. Press the cloak key again to uncloak (re-triggering pauses 3 s), or switch this off.")
 
 	local cachedScript, cachedSlots = nil, nil
 	local function getSlots()
@@ -4373,7 +4373,22 @@ state.recloakEvery = sv("recloakEvery", 8)
 		return cl and cl:FindFirstChild("RemoteEvent")
 	end
 
-	local lastCloak, recloaks = 0, 0
+	local lastCloak, recloaks, suppressUntil = 0, 0, 0
+	-- Drueckt der Spieler die Cloak-Taste waehrend der Tarnung, will er raus: Nachtriggern kurz pausieren,
+	-- damit das normale "Uncloak" des Spiels durchgeht und nicht sofort wieder ueberschrieben wird.
+	con(UIS.InputBegan, function(i, gp)
+		if gp or not state.infAbil then return end
+		local slots = getSlots()
+		if not slots then return end
+		for _, sl in pairs(slots) do
+			if type(sl) == "table" and rawget(sl, "Keybind") == i.KeyCode then
+				local o = rawget(sl, "OriginScript")
+				if typeof(o) == "Instance" and o.Name == "Cloak" and rawget(sl, "Active") then
+					suppressUntil = os.clock() + 3
+				end
+			end
+		end
+	end)
 	task.spawn(function()
 		while H.alive do
 			if state.infAbil then
@@ -4395,7 +4410,7 @@ state.recloakEvery = sv("recloakEvery", 8)
 						end
 					end
 					-- solange die Tarnung läuft: vor dem Server-Timeout neu triggern
-					if cloakActive and os.clock() - lastCloak >= state.recloakEvery then
+					if cloakActive and os.clock() >= suppressUntil and os.clock() - lastCloak >= state.recloakEvery then
 						local re = cloakRemote()
 						if re then
 							lastCloak = os.clock()
