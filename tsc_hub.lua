@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4512,6 +4512,122 @@ state.infAbil = sv("infAbil", false)
 			end
 			task.wait(0.25)
 		end
+	end)
+end)()
+
+-- ================= CLICK TP =================
+-- Strg + Linksklick = zum Mauspunkt teleportieren (eigene HRP-CFrame setzen, repliziert wie normale Bewegung).
+-- Detail-Modus: Strg + Klick setzt stattdessen eine Blase; Pfeiltasten schieben sie (kamerarelativ), Numpad 4/1 = hoch/runter,
+-- Enter = hinteleportieren, Backspace = abbrechen. Während die Blase existiert, schluckt ContextActionService diese Tasten,
+-- damit der Charakter nicht mitläuft. Keine Remotes.
+state.clickTp = sv("clickTp", false); state.tpDetail = sv("tpDetail", false); state.tpBubbleSpeed = sv("tpBubbleSpeed", 20)
+;(function()
+	local CAS = game:GetService("ContextActionService")
+	toggle(S_move, "Ctrl + Click TP", "clickTp", function(on) if not on then H.tpCancel() end end)
+	toggle(S_move, "TP Detail Mode (bubble)", "tpDetail", function(on) if not on then H.tpCancel() end end)
+	slider(S_move, "Bubble Speed", 5, 80, state.tpBubbleSpeed, function(v)
+		state.tpBubbleSpeed = math.floor(v + 0.5); return state.tpBubbleSpeed .. " studs/s" end, "tpBubbleSpeed")
+	local tpInfo = info(S_move, "Ctrl+Click = teleport. Detail mode: Ctrl+Click places a bubble · arrows move · Numpad 4/1 up/down · Enter = TP · Backspace = cancel.")
+
+	local params = RaycastParams.new(); params.FilterType = Enum.RaycastFilterType.Exclude
+	local function mouseHit()
+		local m = UIS:GetMouseLocation()
+		local ray = cam:ViewportPointToRay(m.X, m.Y)
+		params.FilterDescendantsInstances = { lp.Character, H.tpBubble }
+		local r = workspace:Raycast(ray.Origin, ray.Direction * 3000, params)
+		return r and r.Position
+	end
+	local function tpTo(pos)
+		local c = lp.Character
+		local hrp = c and c:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		local look = hrp.CFrame.LookVector
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.CFrame = CFrame.lookAt(pos, pos + Vector3.new(look.X, 0, look.Z))
+	end
+
+	-- Blase: lokales Teil (nur für uns sichtbar), Position = künftige HRP-Position; Linie + Abstand zum Boden
+	local bubble, line, bb
+	local held = {}
+	local KEYS = { Enum.KeyCode.Up, Enum.KeyCode.Down, Enum.KeyCode.Left, Enum.KeyCode.Right,
+		Enum.KeyCode.KeypadFour, Enum.KeyCode.KeypadOne, Enum.KeyCode.Return, Enum.KeyCode.KeypadEnter, Enum.KeyCode.Backspace }
+	H.tpCancel = function()
+		if bubble then bubble:Destroy(); bubble = nil end
+		if line then line:Destroy(); line = nil end
+		H.tpBubble = nil
+		table.clear(held)
+		pcall(function() CAS:UnbindAction("TSC_TP_BUBBLE") end)
+	end
+	local function onKey(_, st, input)
+		local k = input.KeyCode
+		if st == Enum.UserInputState.Begin then
+			if k == Enum.KeyCode.Return or k == Enum.KeyCode.KeypadEnter then
+				local p = bubble and bubble.Position
+				H.tpCancel()
+				if p then tpTo(p) end
+			elseif k == Enum.KeyCode.Backspace then
+				H.tpCancel()
+			else
+				held[k] = true
+			end
+		elseif st == Enum.UserInputState.End or st == Enum.UserInputState.Cancel then
+			held[k] = nil
+		end
+		return Enum.ContextActionResult.Sink
+	end
+	local function placeBubble(pos)
+		if not bubble then
+			bubble = Instance.new("Part")
+			bubble.Name = "TSC_TP_Bubble"; bubble.Shape = Enum.PartType.Ball; bubble.Size = Vector3.new(2.2, 2.2, 2.2)
+			bubble.Anchored = true; bubble.CanCollide = false; bubble.CanQuery = false; bubble.CanTouch = false
+			bubble.Material = Enum.Material.ForceField; bubble.Color = T.accent; bubble.CastShadow = false
+			bubble.Parent = workspace
+			line = Instance.new("Part")
+			line.Name = "TSC_TP_Line"; line.Anchored = true; line.CanCollide = false; line.CanQuery = false; line.CanTouch = false
+			line.Material = Enum.Material.Neon; line.Color = T.accent; line.Transparency = 0.5; line.CastShadow = false
+			line.Parent = workspace
+			bb = Instance.new("BillboardGui")
+			bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(140, 18); bb.StudsOffset = Vector3.new(0, 2.2, 0); bb.Parent = bubble
+			local l = Instance.new("TextLabel")
+			l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold; l.TextSize = 11
+			l.TextColor3 = Color3.new(1, 1, 1); l.TextStrokeTransparency = 0.3; l.Parent = bb
+			H.tpBubble = bubble
+			CAS:BindActionAtPriority("TSC_TP_BUBBLE", onKey, false, 3000, table.unpack(KEYS))
+		end
+		bubble.Position = pos
+	end
+	table.insert(H.conns, { Disconnect = function() H.tpCancel() end })
+
+	con(UIS.InputBegan, function(i, gp)
+		if gp or i.UserInputType ~= Enum.UserInputType.MouseButton1 or not state.clickTp then return end
+		if not (UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl)) then return end
+		local hit = mouseHit()
+		if not hit then return end
+		local pos = hit + Vector3.new(0, 3, 0) -- HRP steht ~3 Studs über dem Boden
+		if state.tpDetail then placeBubble(pos) else tpTo(pos) end
+	end)
+
+	con(RunService.RenderStepped, function(dt)
+		if not bubble then return end
+		local f = cam.CFrame.LookVector; f = Vector3.new(f.X, 0, f.Z)
+		f = f.Magnitude > 0 and f.Unit or Vector3.new(0, 0, -1)
+		local r = Vector3.new(-f.Z, 0, f.X)
+		local d = Vector3.zero
+		if held[Enum.KeyCode.Up] then d = d + f end
+		if held[Enum.KeyCode.Down] then d = d - f end
+		if held[Enum.KeyCode.Right] then d = d + r end
+		if held[Enum.KeyCode.Left] then d = d - r end
+		if held[Enum.KeyCode.KeypadFour] then d = d + Vector3.yAxis end
+		if held[Enum.KeyCode.KeypadOne] then d = d - Vector3.yAxis end
+		if d.Magnitude > 0 then bubble.Position = bubble.Position + d.Unit * state.tpBubbleSpeed * dt end
+		-- Lot zum Boden anzeigen
+		params.FilterDescendantsInstances = { lp.Character, bubble, line }
+		local g = workspace:Raycast(bubble.Position, Vector3.new(0, -500, 0), params)
+		local h = g and (bubble.Position.Y - g.Position.Y) or 500
+		line.Size = Vector3.new(0.12, math.max(h, 0.1), 0.12)
+		line.CFrame = CFrame.new(bubble.Position - Vector3.new(0, h / 2, 0))
+		local my = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+		bb.TextLabel.Text = ("%.0f studs away · %.0f above ground"):format(my and (bubble.Position - my.Position).Magnitude or 0, h)
 	end)
 end)()
 
