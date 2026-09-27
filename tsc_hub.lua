@@ -4329,11 +4329,12 @@ state.adonisOverlay = sv("adonisOverlay", false)
 end)()
 
 -- ================= INFECTED: INFINITE ABILITIES =================
--- Die Fähigkeiten des Infected (Cloak J, Hypnotize K) laufen über eine globale Client-Tabelle `abilitySlots`
--- (Character.AbilityHandlerClient). Dauer und Abklingzeit zählt der CLIENT dort selbst herunter; das Ende meldet
--- erst der Client per FireServer("Uncloak"). Gemessen 27.09.: Duration festgehalten -> 24 s durchgehend getarnt
--- (Limit normal 10 s), Server hat KEINEN eigenen Timer. Hier: Duration = MaxDuration und Cooldown = 0 halten.
--- Kein Hook, nur Zahlen in einer Tabelle. Tabelle wird pro Character neu gebaut -> bei Verlust neu suchen.
+-- Die Fähigkeiten des Infected (Cloak J, Hypnotize K) laufen über die globale Client-Tabelle `abilitySlots` im
+-- Script Character.AbilityHandlerClient. Dauer und Abklingzeit zählt der CLIENT dort selbst herunter; das Ende
+-- meldet erst der Client per FireServer("Uncloak"). Gemessen 27.09.: Duration festgehalten -> 24 s durchgehend
+-- getarnt (Limit normal 10 s), der Server hat KEINEN eigenen Timer.
+-- Zugriff über getsenv(Script) — NICHT über getgc(true): das baut eine Tabelle mit ~460k Objekten (15 ms) und
+-- erzeugt im Dauerlauf so viel Müll, dass der GC das ganze Spiel ruckeln lässt.
 state.infAbil = sv("infAbil", false)
 ;(function()
 	local S_ab = section(miscL, "Infected Abilities")
@@ -4341,59 +4342,43 @@ state.infAbil = sv("infAbil", false)
 	local abInfo = info(S_ab, "")
 	info(S_ab, "Cloak = J, Hypnotize = K. Holds duration + cooldown; the end is only ever reported by the client.")
 
-	local slots = nil
-	local function looksLikeSlots(t)
-		if type(t) ~= "table" then return false end
-		for _, s in pairs(t) do
-			if type(s) == "table" and rawget(s, "Keybind") ~= nil and rawget(s, "Cooldown") ~= nil then return true end
-		end
-		return false
-	end
-	local function valid()
-		if not looksLikeSlots(slots) then return false end
-		for _, s in pairs(slots) do
-			-- OriginScript muss noch im aktuellen Character hängen
-			local o = type(s) == "table" and rawget(s, "OriginScript")
-			if typeof(o) == "Instance" then return o:IsDescendantOf(workspace) end
-		end
-		return false
-	end
-	local function findSlots()
-		if typeof(getgc) ~= "function" then return end
-		for _, v in ipairs(getgc(true)) do
-			if looksLikeSlots(v) then
-				local o
-				for _, s in pairs(v) do if type(s) == "table" then o = rawget(s, "OriginScript") break end end
-				if typeof(o) ~= "Instance" or o:IsDescendantOf(workspace) then slots = v return end
-			end
-		end
+	local cachedScript, cachedSlots = nil, nil
+	local function getSlots()
+		local c = lp.Character
+		local ah = c and c:FindFirstChild("AbilityHandlerClient")
+		if not ah then cachedScript, cachedSlots = nil, nil return end
+		if ah == cachedScript and type(cachedSlots) == "table" then return cachedSlots end
+		cachedScript, cachedSlots = ah, nil
+		if typeof(getsenv) ~= "function" then return end
+		local ok, env = pcall(getsenv, ah)
+		if ok and type(env) == "table" and type(env.abilitySlots) == "table" then cachedSlots = env.abilitySlots end
+		return cachedSlots
 	end
 
-	local lastScan = 0
 	task.spawn(function()
 		while H.alive do
 			if state.infAbil then
-				if not valid() and os.clock() - lastScan > 2 then lastScan = os.clock(); pcall(findSlots) end
-				if valid() then
+				local slots = getSlots()
+				if slots then
 					local names = {}
 					for _, s in pairs(slots) do
 						if type(s) == "table" then
-							local ok = pcall(function()
+							pcall(function()
 								if rawget(s, "MaxDuration") then s.Duration = s.MaxDuration end
 								if (rawget(s, "Cooldown") or 0) > 0 then s.Cooldown = 0 end
+								local o = rawget(s, "OriginScript")
+								if typeof(o) == "Instance" then names[#names + 1] = o.Name end
 							end)
-							local o = rawget(s, "OriginScript")
-							if ok and typeof(o) == "Instance" then names[#names + 1] = o.Name end
 						end
 					end
 					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>'):format(#names > 0 and table.concat(names, ", ") or "?")
 				else
-					abInfo.Text = "no abilities found (are you Infected?)"
+					abInfo.Text = typeof(getsenv) == "function" and "no abilities found (are you Infected?)" or "getsenv not available"
 				end
-			else
+			elseif abInfo.Text ~= "" then
 				abInfo.Text = ""
 			end
-			task.wait(0.1)
+			task.wait(0.25)
 		end
 	end)
 end)()
