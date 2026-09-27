@@ -990,12 +990,18 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		local ok, m = pcall(require, gd)
 		if ok and type(m) == "table" and type(m.Charge) == "table" then return t end
 	end
+	-- Niedergeschlagen: das Spiel markiert das uneinheitlich (Char.Down, Humanoid.Ragdoll, plrRGD, Incap-Objekt)
+	local function isKnocked(c, hum)
+		return c:GetAttribute("Down") == true or hum:GetAttribute("Ragdoll") == true or c:GetAttribute("plrRGD") == true
+			or hum:GetAttribute("plrRGD") == true or c:FindFirstChild("Incap") ~= nil
+	end
+	-- Körperteil + knocked-Flag; nil für tot/nicht geladen
 	local function bodyOf(p)
 		local c = p and p.Character
 		local hum = c and c:FindFirstChildOfClass("Humanoid")
 		local part = c and (c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso") or c:FindFirstChild("HumanoidRootPart"))
-		if not (part and hum and hum.Health > 0 and not c:GetAttribute("Down") and c:IsDescendantOf(workspace)) then return end
-		return part
+		if not (part and hum and hum.Health > 0 and c:IsDescendantOf(workspace)) then return end
+		return part, isKnocked(c, hum)
 	end
 	local function distTo(part)
 		local my = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
@@ -1004,21 +1010,28 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 	local function validTarget(p, slack)
 		if not p or p.Parent ~= Players then return end
 		if state.auraTeam and p.Team ~= nil and p.Team == lp.Team then return end
-		local part = bodyOf(p)
-		if part and distTo(part) <= state.auraRange + (slack or 0) then return part end
+		local part, knocked = bodyOf(p)
+		if part and distTo(part) <= state.auraRange + (slack or 0) then return part, knocked end
 	end
-	local function findTarget()
+	-- Stehende Gegner zuerst (nächster), niedergeschlagene nur, wenn keiner steht
+	local function findTarget(standingOnly)
 		local best, bestPart, bd = nil, nil, math.huge
+		local kBest, kPart, kd = nil, nil, math.huge
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p ~= lp then
-				local part = validTarget(p, 0)
+				local part, knocked = validTarget(p, 0)
 				if part then
 					local d = distTo(part)
-					if d < bd then best, bestPart, bd = p, part, d end
+					if not knocked then
+						if d < bd then best, bestPart, bd = p, part, d end
+					elseif d < kd then
+						kBest, kPart, kd = p, part, d
+					end
 				end
 			end
 		end
-		return best, bestPart
+		if best or standingOnly then return best, bestPart end
+		return kBest, kPart
 	end
 	-- ein geglätteter Zielschritt: 3rd Person -> Cursor Richtung Ziel, 1st Person (Maus zentriert) -> Kamera per mousemoverel
 	local function aimStep(part)
@@ -1055,8 +1068,19 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		while H.alive and state.aura and state.keys.aura and keyHeld(state.keys.aura) and focused() and meleeTool() do
 			-- Sticky: einmal gelockt bleibt das Ziel, solange die Taste gehalten wird; Wechsel nur bei tot/down/weg oder
 			-- weiter als 2x Reichweite. Außerhalb der Reichweite wird weiter mitgezielt, aber nicht geschlagen.
-			local part = validTarget(target, state.auraRange) -- Toleranz = Reichweite -> Lock hält bis 2x Reichweite
-			if not part then target, part = findTarget() end
+			-- Reihenfolge: 1) Sticky-Ziel, solange es steht und in Reichweite ist  2) nächster stehender Gegner in Reichweite
+			-- (wird neues Sticky-Ziel)  3) Sticky-Ziel knapp außerhalb (<= 2x Reichweite): weiter mitzielen, nicht schlagen
+			-- 4) nächster niedergeschlagener in Reichweite
+			local part, knocked = validTarget(target, state.auraRange)
+			local stickyHittable = part and not knocked and distTo(part) <= state.auraRange
+			if not stickyHittable then
+				local sp, spart = findTarget(true)
+				if sp then
+					target, part = sp, spart
+				elseif not (part and not knocked) then
+					target, part = findTarget() -- nur noch niedergeschlagene übrig (oder niemand)
+				end
+			end
 			if not target then
 				auraInfo.Text = "Status: nobody within " .. state.auraRange .. " studs"
 				RunService.RenderStepped:Wait()
