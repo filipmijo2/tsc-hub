@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -792,6 +792,57 @@ state.autoreload = sv("autoreload", false)
 			task.wait(0.15)
 		end
 	end)
+end)()
+
+-- No Spread: LocalGunScript berechnet die Streuung CLIENTSEITIG (spread() -> Pos) und schickt nur den fertigen Zielpunkt
+-- (gunFireNet:Fire({Pos = spread(mouse)})). Streuung = u14.Spread * ...; u14 = deepCopy(require(Tool.GunData)) beim
+-- Ausrüsten (GunManager, Haupt-VM). Daher Spread im Modul-Table (künftige Equips) UND in schon kopierten Tabellen
+-- (getgc) auf 0; Originalwerte werden gemerkt und beim Ausschalten zurückgesetzt. Keine Hooks, keine Remotes.
+state.nospread = sv("nospread", false)
+;(function()
+	local orig = setmetatable({}, { __mode = "k" }) -- [table] = Original-Spread
+	local function isGunTable(t)
+		return type(t) == "table" and rawget(t, "Spread") ~= nil and rawget(t, "MagSize") ~= nil
+			and rawget(t, "RateOfFire") ~= nil and rawget(t, "Recoil") ~= nil
+	end
+	local function patch(t, on)
+		if on then
+			if orig[t] == nil and rawget(t, "Spread") ~= 0 then orig[t] = rawget(t, "Spread") end
+			if orig[t] ~= nil then rawset(t, "Spread", 0) end
+		elseif orig[t] ~= nil then
+			rawset(t, "Spread", orig[t]); orig[t] = nil
+		end
+	end
+	local function patchModules(container, on)
+		if not container then return end
+		for _, tool in ipairs(container:GetChildren()) do
+			local gd = tool:IsA("Tool") and tool:FindFirstChild("GunData")
+			if gd and gd:IsA("ModuleScript") then
+				local ok, m = pcall(require, gd)
+				if ok and isGunTable(m) then patch(m, on) end
+			end
+		end
+	end
+	local function apply()
+		local on = state.nospread
+		patchModules(lp:FindFirstChild("Backpack"), on)
+		patchModules(lp.Character, on)
+		if on then
+			if typeof(getgc) == "function" then
+				for _, v in ipairs(getgc(true)) do if isGunTable(v) then patch(v, true) end end
+			end
+		else
+			for t in pairs(orig) do patch(t, false) end
+		end
+	end
+	toggle(S_gun, "No Spread", "nospread", function() pcall(apply) end)
+	-- neue Waffen (Kauf/Respawn/Ausrüsten): kurz nach dem Equip neu patchen (deepCopy passiert beim Equip)
+	local function hookChar(c)
+		con(c.ChildAdded, function(ch) if state.nospread and ch:IsA("Tool") then task.delay(0.3, function() pcall(apply) end) end end)
+	end
+	if lp.Character then hookChar(lp.Character) end
+	con(lp.CharacterAdded, hookChar)
+	table.insert(H.conns, { Disconnect = function() state.nospread = false; pcall(apply) end })
 end)()
 
 task.spawn(function()
@@ -3594,6 +3645,40 @@ task.spawn(function()
 	end
 end)
 
+-- ================= VERSCHIEBBARE OVERLAYS =================
+-- Nur bei offenem Menü greifbar (pinker Rahmen); sonst Active=false -> Klicks gehen normal ins Spiel.
+-- Position (Ankerpunkt in Pixeln) wird unter state[key] gespeichert. Als H-Feld statt local (Hauptchunk am 200-Locals-Limit).
+H.movable = function(f, key)
+	state[key] = state[key] or sv(key, nil)
+	local p = state[key]
+	if type(p) == "table" and tonumber(p[1]) and tonumber(p[2]) then f.Position = UDim2.fromOffset(p[1], p[2]) end
+	local st = Instance.new("UIStroke"); st.Color = T.accent; st.Thickness = 1.5
+	st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; st.Enabled = false; st.Parent = f
+	local drag, sp, sm = false, nil, nil
+	con(f.InputBegan, function(i)
+		if main.Visible and i.UserInputType == Enum.UserInputType.MouseButton1 then
+			drag = true; sm = i.Position
+			sp = f.AbsolutePosition + f.AbsoluteSize * f.AnchorPoint
+		end
+	end)
+	con(UIS.InputChanged, function(i)
+		if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
+			local d = i.Position - sm
+			f.Position = UDim2.fromOffset(math.floor(sp.X + d.X), math.floor(sp.Y + d.Y))
+		end
+	end)
+	con(UIS.InputEnded, function(i)
+		if drag and i.UserInputType == Enum.UserInputType.MouseButton1 then
+			drag = false; state[key] = { f.Position.X.Offset, f.Position.Y.Offset }
+		end
+	end)
+	con(RunService.RenderStepped, function()
+		local open = main.Visible
+		if st.Enabled ~= open then st.Enabled = open; f.Active = open end
+		if not open then drag = false end
+	end)
+end
+
 -- ================= RADIO SPY =================
 -- Remotes.RadioHistory:InvokeServer() (ohne Args) liefert die letzten 20 Funknachrichten der "gehörten" Kanäle
 -- (Main) – auch ohne Funkgerät / als Test Subject. Pollen alle 4s (wie das Spiel selbst), Dedupe, Anzeige im
@@ -3617,6 +3702,7 @@ state.radioOverlay = sv("radioOverlay", false)
 	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
 	local pad = Instance.new("UIPadding", ov); pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
 	pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+	H.movable(ov, "radioPos")
 	local function render()
 		local function lines(n)
 			local t = {}
@@ -3685,6 +3771,7 @@ state.chatOverlay = sv("chatOverlay", false)
 	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
 	local pad = Instance.new("UIPadding", ov); pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
 	pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+	H.movable(ov, "chatPos")
 	local dirty = false
 	local function lines(n)
 		local t = {}
@@ -3779,6 +3866,32 @@ state.disgDetect = sv("disgDetect", true)
 			task.wait(1)
 		end
 	end)
+end)()
+
+-- ================= FAKE TRANSLATOR =================
+-- HayperScript.ChatHandler übersetzt Infected-Sprache nur clientseitig: HasTranslator/CanHearInfected prüfen
+-- LocalPlayer.Backpack:FindFirstChild("Translator") OHNE Typprüfung. Ein lokaler Folder "Translator" im Backpack genügt:
+-- erscheint nicht in der Hotbar, repliziert nicht zum Server; Skripte, die das Backpack durchgehen, prüfen IsA("Tool").
+state.fakeTranslator = sv("fakeTranslator", false)
+;(function()
+	local S_tr = section(plR, "Fake Translator")
+	local function ensure()
+		local bp = lp:FindFirstChild("Backpack")
+		if not bp then return end
+		local f = bp:FindFirstChild("Translator")
+		if state.fakeTranslator then
+			if not f then
+				f = Instance.new("Folder"); f.Name = "Translator"; f:SetAttribute("TSCFake", true); f.Parent = bp
+			end
+		elseif f and f:GetAttribute("TSCFake") then
+			f:Destroy()
+		end
+	end
+	toggle(S_tr, "Understand Infected", "fakeTranslator", function() pcall(ensure) end)
+	info(S_tr, "Infected speech in chat bubbles gets translated like with a real Translator. Local only.")
+	-- Backpack wird bei Respawn neu erzeugt -> regelmäßig nachziehen
+	task.spawn(function() while H.alive do pcall(ensure) task.wait(1) end end)
+	table.insert(H.conns, { Disconnect = function() state.fakeTranslator = false; pcall(ensure) end })
 end)()
 
 -- ================= CONFIG =================
