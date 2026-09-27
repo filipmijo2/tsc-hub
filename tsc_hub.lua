@@ -4246,7 +4246,7 @@ state.adonisOverlay = sv("adonisOverlay", false)
 		while #log > MAXLOG do table.remove(log, 1) end
 		fileBuf[#fileBuf + 1] = ("[%s] %s %s"):format(e.t, kind, text)
 	end
-	toggle(S_ad, "Monitor Adonis + :/; Commands", "adonisMon", function() end)
+	toggle(S_ad, "Monitor Adonis + Chat Commands", "adonisMon", function() end)
 	toggle(S_ad, "Adonis Overlay", "adonisOverlay", function() end)
 	local adInfo = info(S_ad, "")
 	info(S_ad, "Logged permanently to workspace/" .. LOG_FILE)
@@ -4276,12 +4276,12 @@ state.adonisOverlay = sv("adonisOverlay", false)
 		add("INFO", "Adonis remote not found", false)
 	end
 
-	-- Chat-Befehle mit ":" oder ";"
+	-- Chat-Befehle (alle üblichen Präfixe)
 	con(game:GetService("TextChatService").MessageReceived, function(msg)
 		if not state.adonisMon then return end
 		local text = msg.Text or ""
-		local first = text:sub(1, 1)
-		if first ~= ":" and first ~= ";" then return end
+		-- Befehlspräfix + direkt ein Buchstabe (":kill", ";tp", "!cd", "/e", ".cmds", "?help", "-x", "$x", "#x", "~x", ">x")
+		if not text:match("^[:;!/%.%?%-%$#~>]%a") then return end
 		local src = msg.TextSource
 		local pl = src and Players:GetPlayerByUserId(src.UserId)
 		local staff = pl and select(2, pcall(staffInfo, pl))
