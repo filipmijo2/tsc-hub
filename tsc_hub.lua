@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -946,6 +946,7 @@ end)()
 -- ohnehin herunter; so sehen die Pakete auch im Log wie echte aus.
 state.aura = sv("aura", false); state.auraRange = sv("auraRange", 10); state.auraTeam = sv("auraTeam", true)
 state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2); state.auraRing = sv("auraRing", true)
+state.auraForceMax = sv("auraForceMax", false)
 ;(function()
 	local S_aura = section(sub.Aimbot[2], "Kill Aura (Melee)")
 	local saved = setmetatable({}, { __mode = "k" }) -- [table] = {key = original}
@@ -1025,11 +1026,12 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		if state.aura then pcall(patchAll) end
 		return state.auraRange .. " studs"
 	end, "auraRange")
-	slider(S_aura, "Hit Delay", 0.2, 1.5, state.auraDelay, function(v)
+	slider(S_aura, "Hit Delay", 0.2, 3.5, state.auraDelay, function(v)
 		state.auraDelay = math.floor(v * 20 + 0.5) / 20; state.auraDelay2 = state.auraDelay; return ("%.2f s"):format(state.auraDelay) end, "auraDelay")
 	slider(S_aura, "Smoothing", 1, 10, state.auraSmooth, function(v)
 		state.auraSmooth = math.floor(v + 0.5); state.auraSmooth2 = state.auraSmooth; return tostring(state.auraSmooth) end, "auraSmooth")
 	toggle(S_aura, "Ignore Teammates", "auraTeam", function() end)
+	toggle(S_aura, "Force Max Charge", "auraForceMax", function() end)
 	toggle(S_aura, "Show Range Circle", "auraRing", function() end)
 	local auraInfo = info(S_aura, "Hold the key with a melee weapon (fists): hits the nearest enemy in range until you let go. Each hit only claims the charge a real player could have built up since the last punch (first hit = full charge). Range above 6 is untested server-side.")
 
@@ -1109,6 +1111,19 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 		return d.Magnitude < tol
 	end
 
+	local aimSince = 0
+	-- hart aufs Ziel setzen (ohne Glaettung); gibt true zurueck wenn das Ziel auf dem Bildschirm liegt
+	local function aimSnap(part)
+		local sp = cam:WorldToViewportPoint(part.Position)
+		if sp.Z <= 0 then return false end
+		if UIS.MouseBehavior == Enum.MouseBehavior.LockCenter then
+			local c = cam.ViewportSize / 2
+			if typeof(mousemoverel) == "function" then mousemoverel(sp.X - c.X, sp.Y - c.Y) end
+		else
+			mousemoveabs(math.floor(sp.X + 0.5), math.floor(sp.Y + 0.5))
+		end
+		return true
+	end
 	local target = nil
 	local busy = false
 	local function run()
@@ -1137,12 +1152,23 @@ state.auraDelay = sv("auraDelay2", 0.3); state.auraSmooth = sv("auraSmooth2", 2)
 				RunService.RenderStepped:Wait()
 			else
 				local onTarget = aimStep(part)
+				-- Snap-Fallback: wenn das geglaettete Zielen laenger als snapAfter nicht triftt (bewegtes Ziel,
+				-- hohe Glaettung), einmal hart aufs Ziel setzen. Ohne das bleibt onTarget dauerhaft false -> keine Schlaege.
+				if onTarget then
+					aimSince = 0
+				else
+					if aimSince == 0 then aimSince = os.clock() end
+					if os.clock() - aimSince > 0.4 then
+						onTarget = aimSnap(part)
+						aimSince = 0
+					end
+				end
 				local inRange = distTo(part) <= state.auraRange
 				if not inRange then
 					auraInfo.Text = ('Status: locked <font color="#d266b4">%s</font> · out of range (%.0f)'):format(target.Name, distTo(part))
 				end
 				if inRange and onTarget and os.clock() - lastHit >= state.auraDelay then
-					local L = legitLevel(os.clock() - lastSwing)
+					local L = state.auraForceMax and 3 or legitLevel(os.clock() - lastSwing)
 					setLevel(L)
 					lastSwing = os.clock()
 					mouse1press()
