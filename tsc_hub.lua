@@ -37,13 +37,13 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil" , "recloakEvery" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam" , "doorphase" , "radioSpy", "radioOverlay" , "chatLog", "chatOverlay", "norecoil" , "ventFake", "ventFakeIdx" , "autoreload" , "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing" , "adonisMon", "adonisOverlay" , "infAbil" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
 	keys = { menu = kc(sv("keyMenu", "RightShift"), Enum.KeyCode.RightShift), vent = kc(sv("keyVent", "End"), Enum.KeyCode.End),
 		aim = kc(sv("keyAim", "MouseButton2"), Enum.UserInputType.MouseButton2),
-		aura = kc(sv("keyAura", "F14"), Enum.KeyCode.F14) } }
+		aura = kc(sv("keyAura", "F14"), Enum.KeyCode.F14), cloak = kc(sv("keyCloak", "F"), Enum.KeyCode.F) } }
 H.state = state
 
 -- ================= THEME / GUI-BAUKASTEN (Matcha-Stil) =================
@@ -4331,30 +4331,15 @@ end)()
 -- ================= INFECTED: INFINITE ABILITIES =================
 -- Cloak (J) / Hypnotize (K) hängen an der globalen Tabelle `abilitySlots` im Script Character.AbilityHandlerClient
 -- (Zugriff per getsenv — NICHT per Garbage-Collector-Scan, der baut ~460k Objekte und lässt das Spiel ruckeln).
--- Zwei getrennte Timer: der CLIENT zählt Duration runter und schickt am Ende FireServer("Uncloak"), aber der SERVER
--- hat seinen EIGENEN 10-s-Timer (gemessen 27.09.: Duration festhalten reicht NICHT, serverseitig läuft die Tarnung ab).
--- Deshalb hier zweigleisig: Duration/Cooldown halten (Client schickt kein "Uncloak") UND vor Ablauf per
--- Cloak.RemoteEvent:FireServer("Cloak") neu tarnen. Die Abklingzeit ist 0, ein Nachtriggern ist also erlaubt.
+-- Ablauf im Spiel: Cloak.LocalScript hört auf das lokale BindableEvent slot.Event — "StartAbility" -> FireServer("Cloak"),
+-- alles andere ("EndAbility"/"PressedWhileActive") -> FireServer("Uncloak"). Das Ende kommt NUR vom Client (Duration läuft
+-- ab); der Server hat KEINEN eigenen Timer (gemessen 27.09.: 17 s getarnt, kein "UncloakPlayer" vom Server).
+-- Toggle-Taste feuert daher nur das lokale BindableEvent — den Remote schickt der Spieleigene Code. Duration/Cooldown
+-- werden gehalten, damit das Spiel nicht selbst nach 10 s enttarnt. NIE doppelt tarnen: jedes "CloakPlayer" merkt sich die
+-- aktuelle Transparenz (dann 1) als Ausgangswert -> nach dem Enttarnen bleibt man auf allen Clients unsichtbar.
 state.infAbil = sv("infAbil", false)
-state.recloakEvery = sv("recloakEvery", 8)
 ;(function()
 	local S_ab = section(miscL, "Infected Abilities")
-	toggle(S_ab, "Infinite Cloak / Abilities", "infAbil", function(on)
-		if not on then
-			-- sauber beenden: dem Server einmal "Uncloak" schicken
-			local c = lp.Character
-			local cl = c and c:FindFirstChild("Cloak")
-			local re = cl and cl:FindFirstChild("RemoteEvent")
-			if re then pcall(function() re:FireServer("Uncloak") end) end
-		end
-	end)
-	slider(S_ab, "Re-cloak every", 3, 9, state.recloakEvery, function(v)
-		state.recloakEvery = math.floor(v + 0.5)
-		return state.recloakEvery .. " s"
-	end, "recloakEvery")
-	local abInfo = info(S_ab, "")
-	info(S_ab, "Cloak = J, Hypnotize = K. The server runs its own 10 s timer, so the cloak is re-triggered before it expires. Press the cloak key again to uncloak (re-triggering pauses 3 s), or switch this off.")
-
 	local cachedScript, cachedSlots = nil, nil
 	local function getSlots()
 		local c = lp.Character
@@ -4367,35 +4352,52 @@ state.recloakEvery = sv("recloakEvery", 8)
 		if ok and type(env) == "table" and type(env.abilitySlots) == "table" then cachedSlots = env.abilitySlots end
 		return cachedSlots
 	end
-	local function cloakRemote()
-		local c = lp.Character
-		local cl = c and c:FindFirstChild("Cloak")
-		return cl and cl:FindFirstChild("RemoteEvent")
-	end
-
-	local lastCloak, recloaks, suppressUntil = 0, 0, 0
-	-- Drueckt der Spieler die Cloak-Taste waehrend der Tarnung, will er raus: Nachtriggern kurz pausieren,
-	-- damit das normale "Uncloak" des Spiels durchgeht und nicht sofort wieder ueberschrieben wird.
-	con(UIS.InputBegan, function(i, gp)
-		if gp or not state.infAbil then return end
+	local function cloakSlot()
 		local slots = getSlots()
 		if not slots then return end
-		for _, sl in pairs(slots) do
-			if type(sl) == "table" and rawget(sl, "Keybind") == i.KeyCode then
-				local o = rawget(sl, "OriginScript")
-				if typeof(o) == "Instance" and o.Name == "Cloak" and rawget(sl, "Active") then
-					suppressUntil = os.clock() + 3
-				end
-			end
+		for _, s in pairs(slots) do
+			local o = type(s) == "table" and rawget(s, "OriginScript")
+			if typeof(o) == "Instance" and o.Name == "Cloak" then return s end
 		end
+	end
+	local busy = false
+	local function setCloak(on)
+		local s = cloakSlot()
+		local ev = s and rawget(s, "Event")
+		if not ev or busy then return end
+		if (rawget(s, "Active") == true) == on then return end
+		busy = true
+		task.spawn(function()
+			-- das Cloak-Script sperrt sich 1 s nach jedem Start/Ende -> bis zu 1.5 s nachfassen, bis der Zustand stimmt
+			local t0 = os.clock()
+			repeat
+				pcall(function() ev:Fire(on and "StartAbility" or "EndAbility") end)
+				local t1 = os.clock()
+				repeat task.wait(0.05) until (rawget(s, "Active") == true) == on or os.clock() - t1 > 0.3
+			until (rawget(s, "Active") == true) == on or os.clock() - t0 > 1.5 or not on
+			busy = false
+		end)
+	end
+	toggle(S_ab, "Infinite Cloak / Abilities", "infAbil", function(on)
+		if not on then setCloak(false) end
+	end, "cloak")
+	local abInfo = info(S_ab, "")
+	info(S_ab, "Press the key to cloak, press it again to uncloak — no time limit, no cooldown. J still works too. Hypnotize (K) also has no cooldown while this is on.")
+
+	con(UIS.InputBegan, function(i, gp)
+		if gp or not state.infAbil or not state.keys.cloak or not keyMatch(i, state.keys.cloak) then return end
+		if UIS:GetFocusedTextBox() then return end
+		-- Ist die Toggle-Taste zugleich die Spieltaste (J), macht das Spiel es selbst
+		local s = cloakSlot()
+		if not s or rawget(s, "Keybind") == i.KeyCode then return end
+		setCloak(not (rawget(s, "Active") == true))
 	end)
 	task.spawn(function()
 		while H.alive do
 			if state.infAbil then
 				local slots = getSlots()
-				local cloakActive = false
 				if slots then
-					local names = {}
+					local names, cloaked = {}, false
 					for _, s in pairs(slots) do
 						if type(s) == "table" then
 							pcall(function()
@@ -4404,24 +4406,14 @@ state.recloakEvery = sv("recloakEvery", 8)
 								local o = rawget(s, "OriginScript")
 								if typeof(o) == "Instance" then
 									names[#names + 1] = o.Name
-									if o.Name == "Cloak" and rawget(s, "Active") then cloakActive = true end
+									if o.Name == "Cloak" and rawget(s, "Active") then cloaked = true end
 								end
 							end)
 						end
 					end
-					-- solange die Tarnung läuft: vor dem Server-Timeout neu triggern
-					if cloakActive and os.clock() >= suppressUntil and os.clock() - lastCloak >= state.recloakEvery then
-						local re = cloakRemote()
-						if re then
-							lastCloak = os.clock()
-							recloaks = recloaks + 1
-							pcall(function() re:FireServer("Cloak") end)
-						end
-					end
-					if not cloakActive then lastCloak = 0 end
 					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>%s'):format(
 						#names > 0 and table.concat(names, ", ") or "?",
-						cloakActive and ('  ·  re-cloaks: ' .. recloaks) or "")
+						cloaked and '  ·  <font color="#d266b4">CLOAKED</font>' or "")
 				else
 					abInfo.Text = typeof(getsenv) == "function" and "no abilities found (are you Infected?)" or "getsenv not available"
 				end
@@ -4505,7 +4497,7 @@ task.spawn(function()
 	while H.alive do
 		local t = {}
 		for _, k in ipairs(SAVE_KEYS) do t[k] = state[k] end
-		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name
+		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name; t.keyCloak = state.keys.cloak.Name
 		t.guiX = main.Position.X.Offset; t.guiY = main.Position.Y.Offset; t.guiVisible = main.Visible
 		local ok, js = pcall(function() return HttpService:JSONEncode(t) end)
 		if ok and js ~= last then
