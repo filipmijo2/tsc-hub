@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5069,6 +5069,145 @@ state.infEsp = sv("infEsp", false)
 	end)
 	table.insert(H.conns, { Disconnect = function() for d in pairs(marks) do clearMark(d) end end })
 end)()
+-- ================= VIEW (SPECTATE) =================
+-- Modifier-Taste (Standard B) halten + Linksklick: der Spieler, dessen Bildschirmposition dem Mauszeiger am naechsten
+-- ist, wird angesehen. Es zaehlt NUR der Pixelabstand zur Maus — keine Wandpruefung, keine Entfernungsgrenze.
+-- Gleicher Spieler nochmal oder Taste + Rechtsklick = zurueck zu mir. Der Klick wird geschluckt (ContextActionService),
+-- damit man beim Zielen nicht schiesst/zuschlaegt.
+-- Umsetzung: lokales Anker-Teil als Camera.CameraSubject. Damit macht die Roblox-Kamera Drehen/Zoomen selbst und es
+-- klappt auch, wenn der Ziel-Character rausgestreamt ist (Anker haengt dann an der letzten bekannten Position aus
+-- lastSeen). Sobald der echte Character da ist, wird direkt auf dessen Humanoid umgeschaltet.
+-- Keine Remotes ausser dem spieleigenen ContentStreaming.RequestStreamAround (das feuert das Spiel selbst im Menue).
+state.view = sv("view", false)
+;(function()
+	local CAS = game:GetService("ContextActionService")
+	local RSto = game:GetService("ReplicatedStorage")
+	state.keys.view = kc(sv("keyView", "B"), Enum.KeyCode.B)
+	local S_view = section(plL, "View (Spectate)")
+	toggle(S_view, "Key + Click View", "view", function(on) if not on then H.viewStop() end end, "view")
+	local viewInfo = info(S_view, "Viewing: -", T.accent)
+	info(S_view, "Hold the key and left-click: the player nearest to your mouse on screen gets viewed — walls and distance are ignored. Same player again or key + right-click goes back to you.")
+	button(S_view, "Back to me", function() H.viewStop() end)
+
+	local ov = Instance.new("TextLabel")
+	ov.AnchorPoint = Vector2.new(0.5, 0); ov.Position = UDim2.new(0.5, 0, 0, 84); ov.Size = UDim2.fromOffset(430, 0)
+	ov.AutomaticSize = Enum.AutomaticSize.Y; ov.BackgroundColor3 = Color3.fromRGB(10, 10, 12); ov.BackgroundTransparency = 0.35
+	ov.Font = Enum.Font.GothamBold; ov.TextSize = 14; ov.TextColor3 = T.accent
+	ov.TextWrapped = true; ov.Visible = false; ov.Parent = gui
+	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
+	local vpad = Instance.new("UIPadding", ov); vpad.PaddingLeft = UDim.new(0, 8); vpad.PaddingRight = UDim.new(0, 8)
+	vpad.PaddingTop = UDim.new(0, 4); vpad.PaddingBottom = UDim.new(0, 4)
+	H.movable(ov, "viewPos")
+
+	local target, anchor, lastReq = nil, nil, 0
+
+	-- Position: live aus dem Character, sonst letzte bekannte (lastSeen wird oben mit 2 Hz gefuellt)
+	local function posOf(p)
+		local c = p.Character
+		local r = c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Head") or c.PrimaryPart)
+		if r and c:IsDescendantOf(workspace) then return r.Position, true, c end
+		local ls = lastSeen[p.UserId]
+		return ls and ls.pos or nil, false, nil
+	end
+
+	function H.viewStop()
+		target = nil
+		local c = lp.Character
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if hum then cam.CameraSubject = hum end
+		if anchor then pcall(function() anchor:Destroy() end); anchor = nil end
+		ov.Visible = false
+		viewInfo.Text = "Viewing: -"
+	end
+
+	local function viewStart(p)
+		local pos = posOf(p)
+		if not anchor then
+			anchor = Instance.new("Part")
+			anchor.Name = "TSC_VIEW_ANCHOR"; anchor.Anchored = true; anchor.CanCollide = false
+			anchor.CanQuery = false; anchor.CanTouch = false; anchor.Transparency = 1
+			anchor.Size = Vector3.new(1, 1, 1); anchor.CastShadow = false; anchor.Parent = workspace
+		end
+		if pos then anchor.CFrame = CFrame.new(pos) end
+		target = p
+		cam.CameraSubject = anchor
+		ov.Visible = true
+	end
+
+	-- kleinster Pixelabstand zur Maus; sp.Z > 0 = vor der Kamera (dahinter ist die Projektion sinnlos)
+	local function nearestToMouse()
+		local m = UIS:GetMouseLocation()
+		local best, bestD
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= lp then
+				local pos = posOf(p)
+				if pos then
+					local sp = cam:WorldToViewportPoint(pos + Vector3.new(0, 2, 0))
+					if sp.Z > 0 then
+						local d = (Vector2.new(sp.X, sp.Y) - Vector2.new(m.X, m.Y)).Magnitude
+						if not bestD or d < bestD then best, bestD = p, d end
+					end
+				end
+			end
+		end
+		return best, bestD
+	end
+
+	local function onClick(_, st, input)
+		if st ~= Enum.UserInputState.Begin or not state.view then return Enum.ContextActionResult.Pass end
+		if not keyHeld(state.keys.view) then return Enum.ContextActionResult.Pass end
+		if input.UserInputType == Enum.UserInputType.MouseButton2 then
+			H.viewStop()
+			return Enum.ContextActionResult.Sink
+		end
+		local p = nearestToMouse()
+		if not p then
+			viewInfo.Text = "Viewing: - (no player on screen)"
+		elseif p == target then
+			H.viewStop()
+		else
+			viewStart(p)
+		end
+		return Enum.ContextActionResult.Sink
+	end
+	CAS:BindActionAtPriority("TSC_VIEW_PICK", onClick, false, 2900,
+		Enum.UserInputType.MouseButton1, Enum.UserInputType.MouseButton2)
+	table.insert(H.conns, { Disconnect = function()
+		pcall(function() CAS:UnbindAction("TSC_VIEW_PICK") end)
+		pcall(function() H.viewStop() end)
+	end })
+
+	con(Players.PlayerRemoving, function(p) if p == target then H.viewStop() end end)
+	con(lp.CharacterAdded, function() if target then H.viewStop() end end) -- eigener Respawn: zurueck zu mir
+
+	con(RunService.RenderStepped, function()
+		if not target then return end
+		if not target.Parent or not state.view then H.viewStop() return end
+		local pos, live, c = posOf(target)
+		if pos and anchor then anchor.CFrame = CFrame.new(pos + Vector3.new(0, live and 1.5 or 0, 0)) end
+		if live and c then
+			local hum = c:FindFirstChildOfClass("Humanoid")
+			if hum and cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+		elseif anchor and cam.CameraSubject ~= anchor then
+			cam.CameraSubject = anchor
+		end
+		local myRoot = rootOf(lp)
+		local d = (myRoot and pos) and math.floor((pos - myRoot.Position).Magnitude) or nil
+		ov.Text = ("VIEW  %s%s%s   ·   %s + right-click = back"):format(target.DisplayName,
+			d and ("  ·  " .. d .. "m") or "",
+			live and "" or "  ·  out of stream range (last known position)", keyName(state.keys.view))
+		viewInfo.Text = "Viewing: " .. target.Name .. (live and "" or " (stale)")
+		-- weit weg: Streaming anfordern, damit der Character wirklich sichtbar wird (max 1x/s)
+		if not live and pos and os.clock() - lastReq > 1 then
+			lastReq = os.clock()
+			task.spawn(function() pcall(function() lp:RequestStreamAroundAsync(pos, 1) end) end)
+			local cs = RSto:FindFirstChild("Remotes") and RSto.Remotes:FindFirstChild("ContentStreaming")
+			local ra = cs and cs:FindFirstChild("RequestStreamAround")
+			if ra then pcall(function() ra:FireServer(pos) end) end
+		end
+	end)
+end)()
+
 -- ================= CONFIG =================
 -- Laufende Einstellungen speichern sich automatisch (SAVE_FILE); hier zusätzlich ein Profil zum Sichern/Zurückholen
 local CFG_FILE = "tsc_hub_config.json"
@@ -5141,7 +5280,7 @@ task.spawn(function()
 	while H.alive do
 		local t = {}
 		for _, k in ipairs(SAVE_KEYS) do t[k] = state[k] end
-		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name; t.keyCloak = state.keys.cloak.Name
+		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name; t.keyCloak = state.keys.cloak.Name; t.keyView = state.keys.view and state.keys.view.Name or nil
 		t.guiX = main.Position.X.Offset; t.guiY = main.Position.Y.Offset; t.guiVisible = main.Visible
 		local ok, js = pcall(function() return HttpService:JSONEncode(t) end)
 		if ok and js ~= last then
