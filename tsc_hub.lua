@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "sensePos" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "sensePos" , "ventEsp" , "ventEspHL" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5674,6 +5674,121 @@ state.senseOverlay = sv("senseOverlay", false)
 			task.wait(0.2)
 		end
 	end)
+end)()
+
+-- ================= VENT / MANHOLE ESP =================
+-- Markiert ALLE Vents und Manholes (nicht nur gejammte wie "Mark Jammed Vents"). Erkennung wie dort ueber den
+-- ProximityPrompt: ObjectText enthaelt "Vent" oder "Manhole". Reichweite und Ausblenden kommen aus denselben
+-- Reglern wie das Spieler-ESP (ESP Distance / Fade / Fade Power) ueber fadeAlpha+applyFade.
+-- Startsuche einmal in Chunks, danach ereignisgesteuert; Labels entstehen erst in Reichweite und werden
+-- ausserhalb sofort wieder abgeraeumt. Gejammte Vents werden rot mit Restzeit gezeigt (Attribute Cooldown +
+-- CooldownTime am Vent-Modell), sind also auch ausserhalb der 40 Studs des anderen Features sichtbar.
+state.ventEsp = sv("ventEsp", false); state.ventEspHL = sv("ventEspHL", false)
+;(function()
+	local S_ve = section(visR, "Vents / Manholes")
+	local prompts, marks = {}, {}
+	local function isVentPrompt(d)
+		return d:IsA("ProximityPrompt") and (d.ObjectText:find("Vent") or d.ObjectText:find("Manhole")) ~= nil
+	end
+	local function clear(pp)
+		local m = marks[pp]
+		if m then
+			pcall(function() m.bb:Destroy() end)
+			if m.hl then pcall(function() m.hl:Destroy() end) end
+			marks[pp] = nil
+		end
+	end
+	local function clearAll() for pp in pairs(marks) do clear(pp) end end
+	local function clearHL() for _, m in pairs(marks) do if m.hl then pcall(function() m.hl:Destroy() end) m.hl = nil end end end
+
+	toggle(S_ve, "Vent / Manhole ESP", "ventEsp", function(on) if not on then clearAll() end end)
+	toggle(S_ve, "Highlight model", "ventEspHL", function(on) if not on then clearHL() end end)
+	local veInfo = info(S_ve, "")
+	info(S_ve, "Uses the same Distance / Fade / Fade Power sliders as the player ESP. Jammed vents show red with the remaining cooldown, at any distance.")
+
+	con(workspace.DescendantAdded, function(d)
+		if d:IsA("ProximityPrompt") then task.defer(function() if isVentPrompt(d) then prompts[d] = true end end) end
+	end)
+
+	task.spawn(function()
+		-- Startsuche in Chunks, damit es keinen Ruckler gibt (Workspace hat ~94k Descendants)
+		local all = workspace:GetDescendants()
+		for i = 1, #all do
+			if isVentPrompt(all[i]) then prompts[all[i]] = true end
+			if i % 4000 == 0 then task.wait() end
+		end
+		while H.alive do
+			if state.ventEsp then
+				local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+				local me = r and r.Position
+				local shown, total = 0, 0
+				for pp in pairs(prompts) do
+					if not pp:IsDescendantOf(workspace) then
+						clear(pp); prompts[pp] = nil
+					else
+						total = total + 1
+						local part = pp.Parent
+						if part and not part:IsA("BasePart") then part = part:FindFirstChildWhichIsA("BasePart", true) end
+						local d = (part and me) and (part.Position - me).Magnitude or nil
+						if d and d <= state.espDist then
+							shown = shown + 1
+							local jammed = pp.ActionText == "Jammed"
+							local isMan = pp.ObjectText:find("Manhole") ~= nil
+							local col = jammed and Color3.fromRGB(255, 70, 70)
+								or (isMan and Color3.fromRGB(255, 175, 60) or Color3.fromRGB(95, 210, 255))
+							local m = marks[pp]
+							if not m then
+								local bb = Instance.new("BillboardGui")
+								bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(150, 20); bb.StudsOffset = Vector3.new(0, 2, 0)
+								bb.LightInfluence = 0; bb.Adornee = part; bb.Parent = espFolder
+								local l = Instance.new("TextLabel")
+								l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+								l.TextSize = 12; l.TextStrokeTransparency = 0.3; l.Parent = bb
+								m = { bb = bb, lbl = l }
+								marks[pp] = m
+							end
+							if m.bb.Adornee ~= part then m.bb.Adornee = part end
+							if state.ventEspHL then
+								if not m.hl then
+									local model = pp.Parent
+									while model and model ~= workspace and model:GetAttribute("CooldownTime") == nil do model = model.Parent end
+									if model == workspace or not model then model = pp.Parent end
+									local hl = Instance.new("Highlight")
+									hl.FillTransparency = 0.75; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+									hl.Adornee = model; hl.Parent = espFolder
+									m.hl = hl
+								end
+								m.hl.FillColor = col; m.hl.OutlineColor = col
+							elseif m.hl then
+								pcall(function() m.hl:Destroy() end); m.hl = nil
+							end
+							local txt2
+							if jammed then
+								local model = pp.Parent
+								while model and model ~= workspace and model:GetAttribute("CooldownTime") == nil do model = model.Parent end
+								local cd = model and tonumber(model:GetAttribute("Cooldown"))
+								local ct = model and tonumber(model:GetAttribute("CooldownTime"))
+								local left = (cd and ct) and math.max(0, cd + ct - time()) or nil
+								txt2 = left and ("JAMMED %ds"):format(math.ceil(left)) or "JAMMED"
+							else
+								txt2 = isMan and "MANHOLE" or "VENT"
+							end
+							m.lbl.TextColor3 = col
+							m.lbl.Text = ("%s  %dm"):format(txt2, math.floor(d))
+							applyFade(m.lbl, fadeAlpha(d), 12)
+						elseif marks[pp] then
+							clear(pp)
+						end
+					end
+				end
+				veInfo.Text = ("%d vents/manholes known · %d in range"):format(total, shown)
+			else
+				veInfo.Text = "off"
+			end
+			task.wait(0.3)
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() clearAll() end })
 end)()
 
 -- ================= CONFIG =================
