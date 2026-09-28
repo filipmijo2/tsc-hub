@@ -4873,10 +4873,22 @@ state.dmgShow = sv("dmgShow", false)
 			shown[d] = nil
 		end
 	end
-	local function sweep()
-		for _, d in ipairs(workspace:GetDescendants()) do
-			if isDmg(d) then seen[d] = true pcall(applyOne, d) end
+	-- Voller Workspace-Scan (~110k Instanzen, ~65 ms) nur EINMAL und in Chunks; danach haelt DescendantAdded
+	-- `seen` aktuell. Vorher lief der Scan alle 2 s am Stueck = periodischer ~80-ms-Ruckler.
+	local scanned = false
+	local function fullScan()
+		if scanned then return end
+		scanned = true
+		local all = workspace:GetDescendants()
+		for i = 1, #all do
+			local d = all[i]
+			if isDmg(d) then seen[d] = true end
+			if i % 4000 == 0 then task.wait() end
 		end
+	end
+	local function sweep()
+		fullScan()
+		for d in pairs(seen) do if d.Parent then pcall(applyOne, d) end end
 	end
 	local function restoreAll()
 		for d in pairs(touched) do if d.Parent then pcall(function() d.CanTouch = touched[d] end) end end
@@ -4887,14 +4899,16 @@ state.dmgShow = sv("dmgShow", false)
 		shown = {}
 	end
 
-	toggle(S_dz, "No Damage (local)", "dmgOff", function() pcall(sweep) end)
-	toggle(S_dz, "Show Damage Zones", "dmgShow", function() pcall(sweep) end)
+	toggle(S_dz, "No Damage (local)", "dmgOff", function() task.spawn(pcall, sweep) end)
+	toggle(S_dz, "Show Damage Zones", "dmgShow", function() task.spawn(pcall, sweep) end)
 	local dzInfo = info(S_dz, "")
 	info(S_dz, '<font color="#ff003c">red = instant kill</font> · <font color="#ff6e00">orange</font> · <font color="#ffc800">yellow</font> · <font color="#78c8ff">light</font>  — these parts are invisible in the game; collision is left alone.')
 
 	-- neu gestreamte Zonen mitnehmen
 	con(workspace.DescendantAdded, function(d)
-		if (state.dmgOff or state.dmgShow) and isDmg(d) then seen[d] = true task.defer(function() pcall(applyOne, d) end) end
+		if not isDmg(d) then return end
+		seen[d] = true
+		if state.dmgOff or state.dmgShow then task.defer(function() pcall(applyOne, d) end) end
 	end)
 
 	task.spawn(function()
