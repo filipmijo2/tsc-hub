@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -1490,7 +1490,7 @@ end
 -- damit Boxen nicht hinterherwackeln. Nur Chars im Workspace (rausgestreamte haben keine aktuelle Position).
 do
 state.espBox = sv("espBox", true); state.espBoxStyle = sv("espBoxStyle", 1); state.espBoxFill = sv("espBoxFill", false)
-state.espHealth = sv("espHealth", true); state.espName = sv("espName", true); state.espDistTxt = sv("espDistTxt", true)
+state.espHealth = sv("espHealth", true); state.espName = sv("espName", true); state.espTeamTag = sv("espTeamTag", true); state.espDistTxt = sv("espDistTxt", true)
 state.espTextSize = sv("espTextSize2", 15); state.espTracer = sv("espTracer", false); state.espTracerFov = sv("espTracerFov", true)
 state.espTracerFrom = sv("espTracerFrom", 1); state.espTeamCol = sv("espTeamCol", true); state.espTargetCol = sv("espTargetCol", true)
 state.espHideTeam = sv("espHideTeam", false)
@@ -1508,6 +1508,23 @@ dropdown(S_espStyle, "Box Style", { "Full", "Corners" }, state.espBoxStyle, func
 toggle(S_espStyle, "Box Fill", "espBoxFill", function() end)
 toggle(S_espStyle, "Health Bar", "espHealth", function() end)
 toggle(S_espStyle, "Names", "espName", function() end)
+toggle(S_espStyle, "Team Tag after Name (JU, HU …)", "espTeamTag", function() end)
+-- Team-Kuerzel: Spiel-Attribut "Abbreviation" am Team (JU, HU, SD …); fehlt es, kurzer Name bzw. Anfangsbuchstaben
+H.teamTagCache = {}
+function H.teamTag(team)
+	if not team then return nil end
+	local c = H.teamTagCache[team]
+	if c ~= nil then return c or nil end
+	local ab = team:GetAttribute("Abbreviation")
+	if type(ab) ~= "string" or ab == "" then
+		local n = team.Name:gsub("[^%w%s]", "")
+		if n == "Menu" or n == "" then ab = false
+		elseif not n:find("%s") and #n <= 6 then ab = n:upper()
+		else ab = n:gsub("(%w)%w*%s*", "%1"):upper() end
+	end
+	H.teamTagCache[team] = ab
+	return ab or nil
+end
 toggle(S_espStyle, "Distance", "espDistTxt", function() end)
 slider(S_espStyle, "Text Size", 9, 18, state.espTextSize, function(v)
 	state.espTextSize = math.floor(v + 0.5); state.espTextSize2 = state.espTextSize; return tostring(state.espTextSize) end, "espTextSize")
@@ -1552,7 +1569,7 @@ local function build(p)
 	local hbg = Instance.new("Frame"); hbg.BorderSizePixel = 0; hbg.BackgroundColor3 = BLACK; hbg.BackgroundTransparency = 0.35; hbg.Parent = root
 	local hfill = Instance.new("Frame"); hfill.BorderSizePixel = 0; hfill.AnchorPoint = Vector2.new(0, 1); hfill.Parent = hbg
 	o.hbg, o.hfill = hbg, hfill
-	o.name = label(root); o.info = label(root)
+	o.name = label(root); o.info = label(root); o.name.RichText = true
 	o.name.Font = ESP_FONT_BOLD
 	o.tracer = { line(root, 1) }
 	return o
@@ -1659,7 +1676,10 @@ RunService:BindToRenderStep("TSC_ESP", Enum.RenderPriority.Camera.Value + 2, fun
 		local ts = math.max(12, math.floor(state.espTextSize * (1 - 0.2 * a) + 0.5))
 		o.name.Visible = state.espName
 		if state.espName then
-			o.name.Text = p.DisplayName; o.name.TextSize = ts; o.name.TextColor3 = col
+			local nm = p.DisplayName:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+			local tag = state.espTeamTag and H.teamTag(p.Team)
+			if tag then nm = nm .. ('<font size="%d"> (%s)</font>'):format(math.max(8, ts - 4), tag) end
+			o.name.Text = nm; o.name.TextSize = ts; o.name.TextColor3 = col
 			o.name.TextTransparency = a; o.name.TextStrokeTransparency = 0.15 + 0.85 * a
 			o.name.Position = UDim2.fromOffset(cx, y0 - ts - 4); o.name.Size = UDim2.fromOffset(240, ts + 2)
 		end
