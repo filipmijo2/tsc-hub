@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -537,6 +537,72 @@ state.ventFakeIdx = sv("ventFakeIdx", 1)
 		end
 	end)
 	table.insert(H.conns, { Disconnect = function() removeFake() end })
+end)()
+
+-- ================= JAMMED VENTS =================
+-- Nach einem Fehlversuch setzt der Server den Prompt-Text auf "Jammed". Am Vent-Modell: Attribut Cooldown
+-- (= time() beim Jammen) + CooldownTime (Sperrdauer, meist 40 s). Rein lesend, markiert nur im Umkreis.
+state.ventJam = sv("ventJam", true)
+;(function()
+	local RANGE = 40
+	local prompts = {}   -- [ProximityPrompt] = true (nur Vent/Manhole)
+	local marks = {}     -- [prompt] = {hl=, bb=, lbl=}
+	local function isVentPrompt(d)
+		return d:IsA("ProximityPrompt") and (d.ObjectText:find("Vent") or d.ObjectText:find("Manhole")) ~= nil
+	end
+	local function clear(pp)
+		local m = marks[pp]
+		if m then pcall(function() m.hl:Destroy() end) pcall(function() m.bb:Destroy() end) marks[pp] = nil end
+	end
+	toggle(S_vent, "Mark Jammed Vents (40 studs)", "ventJam", function(on)
+		if not on then for pp in pairs(marks) do clear(pp) end end
+	end)
+	con(workspace.DescendantAdded, function(d) if d:IsA("ProximityPrompt") then task.defer(function() if isVentPrompt(d) then prompts[d] = true end end) end end)
+	task.spawn(function()
+		-- Startsuche einmal, in Chunks (kein Ruckler)
+		local all = workspace:GetDescendants()
+		for i = 1, #all do
+			if isVentPrompt(all[i]) then prompts[all[i]] = true end
+			if i % 4000 == 0 then task.wait() end
+		end
+		while H.alive do
+			local r = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+			for pp in pairs(prompts) do
+				local part = pp.Parent
+				if part and not part:IsA("BasePart") then part = part:FindFirstChildWhichIsA("BasePart", true) end
+				if not pp:IsDescendantOf(workspace) then clear(pp); prompts[pp] = nil; part = nil end
+				local jammed = state.ventJam and r and part and pp.ActionText == "Jammed"
+					and (part.Position - r.Position).Magnitude <= RANGE
+				if jammed then
+					local model = pp.Parent
+					while model and model ~= workspace and model:GetAttribute("CooldownTime") == nil do model = model.Parent end
+					if model == workspace or not model then model = pp.Parent end
+					local m = marks[pp]
+					if not m then
+						local hl = Instance.new("Highlight")
+						hl.FillColor = Color3.fromRGB(255, 60, 60); hl.OutlineColor = Color3.fromRGB(255, 60, 60)
+						hl.FillTransparency = 0.6; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+						hl.Adornee = model; hl.Parent = espFolder
+						local bb = Instance.new("BillboardGui")
+						bb.AlwaysOnTop = true; bb.Size = UDim2.fromOffset(120, 20); bb.StudsOffset = Vector3.new(0, 2, 0)
+						bb.LightInfluence = 0; bb.Adornee = part; bb.Parent = espFolder
+						local l = Instance.new("TextLabel")
+						l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+						l.TextSize = 12; l.TextColor3 = Color3.fromRGB(255, 80, 80); l.TextStrokeTransparency = 0.3; l.Parent = bb
+						m = { hl = hl, bb = bb, lbl = l }
+						marks[pp] = m
+					end
+					local cd, ct = tonumber(model:GetAttribute("Cooldown")), tonumber(model:GetAttribute("CooldownTime"))
+					local left = (cd and ct) and math.max(0, cd + ct - time()) or nil
+					m.lbl.Text = left and ("JAMMED %ds"):format(math.ceil(left)) or "JAMMED"
+				elseif marks[pp] then
+					clear(pp)
+				end
+			end
+			task.wait(0.3)
+		end
+	end)
+	table.insert(H.conns, { Disconnect = function() for pp in pairs(marks) do clear(pp) end end })
 end)()
 
 local ventStatus = info(S_vent, "Status: -")
