@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos" , "ventEsp" , "ventEspHL" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos"  , "itType" , "itWait" , "ventEsp" , "ventEspHL" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5857,6 +5857,161 @@ state.ventEsp = sv("ventEsp", false); state.ventEspHL = sv("ventEspHL", false)
 		end
 	end)
 	table.insert(H.conns, { Disconnect = function() clearAll() end })
+end)()
+
+-- ================= INFECT TRIP =================
+-- Hinfahren, infizieren lassen, zum Spawn zurueck -- alles auf Knopfdruck, nie automatisch.
+-- Wie die Infektion funktioniert: die Ordner unter Workspace.InfectedPuddles tragen die Attribute InfectAmount
+-- und InfectedType, die Pfuetzenteile darin haben TouchInterest. Beruehrungen des eigenen (client-owned)
+-- Characters meldet der Client -> auf der Pfuetze stehen und wackeln laesst InfectionLevel steigen, bei
+-- MaxInfectionValue (100) ist man infiziert. SquidDog gibt 70 pro Kontakt, also zwei Beruehrungen.
+-- Problem: die Pfuetzen sind dynamisch UND rausgestreamt, wenn man weit weg ist -- dann findet man sie nicht.
+-- Loesung: jede je gesehene Pfuetze wird mit Typ und Position in tsc_puddles.json gemerkt, der Trip springt
+-- auf die gemerkte Position, fordert Streaming an und wartet bis die Pfuetze wirklich da ist.
+state.itType = sv("itType", 1); state.itWait = sv("itWait", 14)
+;(function()
+	local PFILE = "tsc_puddles.json"
+	local TYPES = { "SquidDog", "TabbyCat", "Tiger", "WhiteInfected", "LightInfected", "DarkDragon", "BlueDragon",
+		"DarkWolf", "HypnoCat", "TigerShark", "ConeLizard", "SpiderWolf", "BerylWolf", "SnowLeopard", "FireFox", "ArcticFox" }
+
+	local db = {}
+	pcall(function()
+		if isfile(PFILE) then db = HttpService:JSONDecode(readfile(PFILE)) or {} end
+	end)
+	local dirty = false
+	local function remember(typ, pos)
+		local old = db[typ]
+		if old and (Vector3.new(old[1], old[2], old[3]) - pos).Magnitude < 10 then return end
+		db[typ] = { pos.X, pos.Y, pos.Z }
+		dirty = true
+	end
+
+	local S_it = section(miscR, "Infect Trip")
+	local itInfo = info(S_it, "", T.accent)
+	dropdown(S_it, "Specimen", TYPES, state.itType, function(i) state.itType = i end, "itType")
+	slider(S_it, "Max wait", 5, 40, state.itWait, function(v)
+		state.itWait = math.floor(v + 0.5); return state.itWait .. " s" end, "itWait")
+	info(S_it, "Jumps to a remembered puddle of that type, wiggles until InfectionLevel is full, then back to a Test Subject spawn. Puddles are dynamic - a type only works once the hub has seen one. Positions are saved to " .. PFILE .. ".")
+
+	-- Lerner: alle 2 s die Ordner abklappern (16 Ordner, kostet nichts)
+	task.spawn(function()
+		while H.alive do
+			local ip = workspace:FindFirstChild("InfectedPuddles")
+			if ip then
+				for _, f in ipairs(ip:GetChildren()) do
+					for _, c in ipairs(f:GetDescendants()) do
+						if c:IsA("BasePart") then remember(f.Name, c.Position) break end
+					end
+				end
+			end
+			if dirty then dirty = false; pcall(function() writefile(PFILE, HttpService:JSONEncode(db)) end) end
+			task.wait(2)
+		end
+	end)
+
+	local function iv()
+		local c = lp.Character
+		return c and c:FindFirstChild("InfectedValues")
+	end
+	local function level()
+		local v = iv()
+		local l = v and v:FindFirstChild("InfectionLevel")
+		local m = v and v:FindFirstChild("MaxInfectionValue")
+		return l and l.Value or 0, m and m.Value or 100
+	end
+	local function infected()
+		local v = iv()
+		local f = v and v:FindFirstChild("Infected")
+		return (f and f.Value) == true
+	end
+	local function spawnPos(near)
+		local ts = workspace:FindFirstChild("TeamSpawns")
+		local folder = ts and (ts:FindFirstChild("TestSubjectSpawns") or ts:FindFirstChild("CivilSpawns"))
+		local best, bd
+		if folder then
+			for _, s in ipairs(folder:GetChildren()) do
+				local p = s:IsA("BasePart") and s.Position or (s:IsA("Model") and s:GetPivot().Position)
+				if p then
+					local d = near and (p - near).Magnitude or 0
+					if not bd or d < bd then best, bd = p, d end
+				end
+			end
+		end
+		return best
+	end
+
+	local running = false
+	H.itAbort = false
+	local function trip()
+		if running then H.itAbort = true; itInfo.Text = "aborting..."; return end
+		local typ = TYPES[state.itType] or TYPES[1]
+		local c = lp.Character
+		local hrp = c and c:FindFirstChild("HumanoidRootPart")
+		if not hrp then itInfo.Text = "no character"; return end
+		if infected() then itInfo.Text = "already infected (" .. typ .. " trip pointless)"; return end
+
+		local ip = workspace:FindFirstChild("InfectedPuddles")
+		local live
+		if ip and ip:FindFirstChild(typ) then
+			for _, d in ipairs(ip[typ]:GetDescendants()) do if d:IsA("BasePart") then live = d break end end
+		end
+		local target = live and live.Position or (db[typ] and Vector3.new(db[typ][1], db[typ][2], db[typ][3]))
+		if not target then
+			itInfo.Text = ("no %s puddle known - none seen yet"):format(typ)
+			return
+		end
+
+		running = true; H.itAbort = false
+		local home = hrp.CFrame
+		local back = spawnPos(home.Position) or home.Position
+		local l0 = select(1, level())
+		task.spawn(function()
+			local t0 = os.clock()
+			local phase = 0
+			while running and not H.itAbort and os.clock() - t0 < state.itWait do
+				local ch = lp.Character
+				local h = ch and ch:FindFirstChild("HumanoidRootPart")
+				if not h then break end
+				-- auf der Pfuetze wackeln, damit Touched mehrfach feuert
+				phase = phase + 1
+				local off = Vector3.new(((phase % 2 == 0) and 1.5 or -1.5), 3.5, ((phase % 4 < 2) and 1.5 or -1.5))
+				h.CFrame = CFrame.new(target + off)
+				h.AssemblyLinearVelocity = Vector3.zero
+				if phase == 1 then pcall(function() lp:RequestStreamAroundAsync(target, 2) end) end
+				local lv, mx = level()
+				itInfo.Text = ("%s: level %d / %d  (%.0fs)"):format(typ, lv, mx, os.clock() - t0)
+				if infected() or lv >= mx then break end
+				task.wait(0.15)
+			end
+			local lv, mx = level()
+			local ch = lp.Character
+			local h = ch and ch:FindFirstChild("HumanoidRootPart")
+			if h then
+				h.CFrame = CFrame.new(back + Vector3.new(0, 4, 0))
+				h.AssemblyLinearVelocity = Vector3.zero
+			end
+			local okTxt = infected() and "INFECTED" or ((lv > l0) and ("partial: %d / %d"):format(lv, mx) or "no contact registered")
+			itInfo.Text = ("%s -> %s, back at spawn"):format(typ, okTxt)
+			running = false
+		end)
+	end
+
+	button(S_it, "Infect me (and return)", function() task.spawn(function() pcall(trip) end) end)
+	button(S_it, "Abort", function() H.itAbort = true end)
+
+	task.spawn(function()
+		while H.alive do
+			if not running then
+				local known = 0
+				for _ in pairs(db) do known = known + 1 end
+				local typ = TYPES[state.itType] or "?"
+				local lv, mx = level()
+				itInfo.Text = ("%s: %s | infection %d/%d | %d puddle positions known"):format(
+					typ, db[typ] and "position known" or "not seen yet", lv, mx, known)
+			end
+			task.wait(1)
+		end
+	end)
 end)()
 
 -- ================= CONFIG =================
