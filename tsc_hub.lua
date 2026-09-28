@@ -877,6 +877,34 @@ state.autoreload = sv("autoreload", false)
 	end)
 end)()
 
+-- Gebuendelter getgc-Durchlauf: getgc(true) liefert in diesem Spiel ~460.000 Objekte. No Spread, Max Charge und
+-- Kill Aura riefen den bei JEDEM Waffen-Equip je einmal auf (Max Charge beim Ausschalten zweimal) -> ~400 ms
+-- Freeze pro Ausruesten (User 28.09.: "sobald ich ein tool rausohle lagt es tod", gemessen worst frame 401 ms).
+-- Jetzt: Anfragen werden 0.3 s gesammelt und in EINEM Durchlauf abgearbeitet, Nicht-Tabellen vorher aussortiert.
+-- Ausserdem fragen die Features den Durchlauf nur noch, wenn tatsaechlich eine neue Waffen-Tabelle dazukam;
+-- normales Ein-/Ausruesten kommt ohne getgc aus, weil die Modul-Tabelle gepatcht ist und der deepCopy beim
+-- Equip die gepatchten Werte erbt.
+H.gcPending, H.gcRunning = {}, false
+function H.gcRequest(name, visitor)
+	if typeof(getgc) ~= "function" then return end
+	H.gcPending[name] = visitor
+	if H.gcRunning then return end
+	H.gcRunning = true
+	task.delay(0.3, function()
+		H.gcRunning = false
+		local vis = H.gcPending
+		H.gcPending = {}
+		local list = {}
+		for _, fn in pairs(vis) do list[#list + 1] = fn end
+		if #list == 0 then return end
+		for _, v in ipairs(getgc(true)) do
+			if type(v) == "table" then
+				for i = 1, #list do pcall(list[i], v) end
+			end
+		end
+	end)
+end
+
 -- No Spread: LocalGunScript berechnet die Streuung CLIENTSEITIG (spread() -> Pos) und schickt nur den fertigen Zielpunkt
 -- (gunFireNet:Fire({Pos = spread(mouse)})). Streuung = u14.Spread * ...; u14 = deepCopy(require(Tool.GunData)) beim
 -- Ausrüsten (GunManager, Haupt-VM). Daher Spread im Modul-Table (künftige Equips) UND in schon kopierten Tabellen
@@ -896,15 +924,21 @@ state.nospread = sv("nospread", false)
 			rawset(t, "Spread", orig[t]); orig[t] = nil
 		end
 	end
+	local seenMod = setmetatable({}, { __mode = "k" })
 	local function patchModules(container, on)
-		if not container then return end
+		local newly = false
+		if not container then return newly end
 		for _, tool in ipairs(container:GetChildren()) do
 			local gd = tool:IsA("Tool") and tool:FindFirstChild("GunData")
 			if gd and gd:IsA("ModuleScript") then
 				local ok, m = pcall(require, gd)
-				if ok and isGunTable(m) then patch(m, on) end
+				if ok and isGunTable(m) then
+					if on and not seenMod[m] then seenMod[m] = true; newly = true end
+					patch(m, on)
+				end
 			end
 		end
+		return newly
 	end
 	local function apply()
 		local on = state.nospread
@@ -921,7 +955,13 @@ state.nospread = sv("nospread", false)
 	toggle(S_gun, "No Spread", "nospread", function() pcall(apply) end)
 	-- neue Waffen (Kauf/Respawn/Ausrüsten): kurz nach dem Equip neu patchen (deepCopy passiert beim Equip)
 	local function hookChar(c)
-		con(c.ChildAdded, function(ch) if state.nospread and ch:IsA("Tool") then task.delay(0.3, function() pcall(apply) end) end end)
+		con(c.ChildAdded, function(ch)
+			if not state.nospread or not ch:IsA("Tool") then return end
+			local a, b = false, false
+			pcall(function() a = patchModules(lp.Character, true) end)
+			pcall(function() b = patchModules(lp:FindFirstChild("Backpack"), true) end)
+			if a or b then H.gcRequest("nospread", function(v) if isGunTable(v) then patch(v, true) end end) end
+		end)
 	end
 	if lp.Character then hookChar(lp.Character) end
 	con(lp.CharacterAdded, hookChar)
@@ -961,15 +1001,21 @@ state.maxcharge = sv("maxcharge", false)
 			orig[t] = nil
 		end
 	end
+	local seenMod = setmetatable({}, { __mode = "k" })
 	local function patchModules(container, on)
-		if not container then return end
+		local newly = false
+		if not container then return newly end
 		for _, tool in ipairs(container:GetChildren()) do
 			local gd = tool:IsA("Tool") and tool:FindFirstChild("GunData")
 			if gd and gd:IsA("ModuleScript") then
 				local ok, m = pcall(require, gd)
-				if ok and type(m) == "table" and isChargeTable(rawget(m, "Charge")) then patch(m.Charge, on) end
+				if ok and type(m) == "table" and isChargeTable(rawget(m, "Charge")) then
+					if on and not seenMod[m] then seenMod[m] = true; newly = true end
+					patch(m.Charge, on)
+				end
 			end
 		end
+		return newly
 	end
 	local function apply()
 		local on = state.maxcharge
@@ -994,7 +1040,13 @@ state.maxcharge = sv("maxcharge", false)
 	end
 	toggle(S_gun, "Always Max Charge (melee)", "maxcharge", function() pcall(apply) end)
 	local function hookChar(c)
-		con(c.ChildAdded, function(ch) if state.maxcharge and ch:IsA("Tool") then task.delay(0.3, function() pcall(apply) end) end end)
+		con(c.ChildAdded, function(ch)
+			if not state.maxcharge or not ch:IsA("Tool") then return end
+			local a, b = false, false
+			pcall(function() a = patchModules(lp.Character, true) end)
+			pcall(function() b = patchModules(lp:FindFirstChild("Backpack"), true) end)
+			if a or b then H.gcRequest("maxcharge", function(v) if isChargeTable(v) then patch(v, true) end end) end
+		end)
 	end
 	if lp.Character then hookChar(lp.Character) end
 	con(lp.CharacterAdded, hookChar)
@@ -1061,18 +1113,27 @@ state.auraForceMax = sv("auraForceMax", false)
 		el = el - 0.15 -- Windup + Reaktionszeit des vorigen Schlags
 		return el >= ma and 3 or el >= mi and 2 or el >= lo and 1 or 0
 	end
-	local function patchAll()
+	local seenMod = setmetatable({}, { __mode = "k" })
+	local function patchModulesOnly()
+		local newly = false
 		for _, cont in ipairs({ lp:FindFirstChild("Backpack"), lp.Character }) do
 			if cont then
 				for _, tool in ipairs(cont:GetChildren()) do
 					local gd = tool:IsA("Tool") and tool:FindFirstChild("GunData")
 					if gd and gd:IsA("ModuleScript") then
 						local ok, m = pcall(require, gd)
-						if ok and isMeleeTable(m) then patchTable(m) end
+						if ok and isMeleeTable(m) then
+							if not seenMod[m] then seenMod[m] = true; newly = true end
+							patchTable(m)
+						end
 					end
 				end
 			end
 		end
+		return newly
+	end
+	local function patchAll()
+		patchModulesOnly()
 		if typeof(getgc) == "function" then
 			for _, v in ipairs(getgc(true)) do if isMeleeTable(v) then patchTable(v) end end
 		end
@@ -1314,7 +1375,12 @@ state.auraForceMax = sv("auraForceMax", false)
 	table.insert(H.conns, { Disconnect = function() RunService:UnbindFromRenderStep("TSC_AURA_RING") end })
 
 	local function hookChar(c)
-		con(c.ChildAdded, function(ch) if state.aura and ch:IsA("Tool") then task.delay(0.3, function() pcall(patchAll) end) end end)
+		con(c.ChildAdded, function(ch)
+			if not state.aura or not ch:IsA("Tool") then return end
+			local newly = false
+			pcall(function() newly = patchModulesOnly() end)
+			if newly then H.gcRequest("aura", function(v) if isMeleeTable(v) then patchTable(v) end end) end
+		end)
 	end
 	if lp.Character then hookChar(lp.Character) end
 	con(lp.CharacterAdded, hookChar)
