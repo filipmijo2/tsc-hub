@@ -4660,6 +4660,7 @@ state.infAbil = sv("infAbil", false)
 						hookedEv = ev; wantCloak = false
 						con(ev.Event, function(n) if n == "PressedWhileActive" then wantCloak = false end end)
 					end
+					H.cloakActive = cloaked
 					if wantCloak and cs and not cloaked and not busy and os.clock() - lastTry > 1.2 then setCloak(true) end
 					abInfo.Text = ('<font color="#78ff8c">holding: %s</font>%s'):format(
 						#names > 0 and table.concat(names, ", ") or "?",
@@ -5304,9 +5305,8 @@ end)()
 -- -> niemand hoert mich, und niemand sieht die Laufanimation. Rein lokal, kein Remote, kein Hook.
 -- Cloak deckt den Ton NICHT ab (im Cloak-Script gibt es keine Sound-Behandlung), darum dieses Feature.
 -- Betroffene Animationen (aus Modules.Animations.Backtrack): walk, run, panicrun, crouch, crawl, gunwalk, climb.
--- Standard ist Stop(0) — sieht fuer andere wie Stillstehen aus. Spielt das Framework die Animation danach
--- sofort wieder (Churn), wird automatisch auf Speed 0 umgestellt: der Track bleibt "laufend", erreicht aber
--- nie einen Marker, also garantiert still (dafuer fuer andere eine eingefrorene Pose).
+-- Schritt-Tracks werden per Stop(0) beendet (fuer andere: gleitet ohne Laufanimation) und jeden Frame vor dem
+-- Animations-Schritt nachkontrolliert.
 state.silentStep = sv("silentStep", false); state.silentStepCloak = sv("silentStepCloak", false)
 ;(function()
 	local RSss = game:GetService("ReplicatedStorage")
@@ -5325,11 +5325,14 @@ state.silentStep = sv("silentStep", false); state.silentStepCloak = sv("silentSt
 	local ssInfo = info(S_ss, "")
 	info(S_ss, "Footsteps are produced by every listener's own client from your walk animation. No walk animation = nobody can hear you. Cloak alone does not silence steps.")
 
-	local killed, mode, hist = 0, "stop", {}
+	local killed = 0
 	-- cloaked: NameHidden ist der serverseitige Tarn-Marker (siehe Cloak-Recon 27.09.)
 	local function cloaked()
 		local c = lp.Character
-		return (c and c:GetAttribute("NameHidden") == true) or false
+		if not c then return false end
+		if H.cloakActive or c:GetAttribute("NameHidden") == true then return true end
+		local t = c:FindFirstChild("Torso")
+		return (t and t.Transparency >= 0.99) or false
 	end
 	local function active()
 		if not state.silentStep then return false end
@@ -5337,24 +5340,14 @@ state.silentStep = sv("silentStep", false); state.silentStepCloak = sv("silentSt
 		return true
 	end
 
-	local function suppress(tr)
+	-- Immer Stop(0), nie einfrieren: das Framework setzt jeden Frame (RenderStepped) per SetAnimationSpeed ->
+	-- CoreAnimationTrack:AdjustSpeed(x) das Tempo neu, ein Speed-0-Freeze wurde dadurch sofort aufgehoben und die
+	-- Schritt-Marker liefen wieder. Ein gestoppter Track bleibt gestoppt (Framework spielt ihn erst beim naechsten
+	-- Animationswechsel neu -> AnimationPlayed -> sofort wieder Stop, gleicher Frame, repliziert nie als "laeuft").
+	local function suppress(tr, counted)
 		local a = tr.Animation
 		if not a or not STEP[a.AnimationId] then return end
-		killed = killed + 1
-		if mode == "freeze" then
-			pcall(function() tr:AdjustSpeed(0) end)
-			return
-		end
-		-- Churn-Erkennung: dieselbe Animation mehr als 8x in einer Sekunde -> einfrieren statt stoppen
-		local now = os.clock()
-		local h = hist[a.AnimationId]
-		if not h or now - h.t > 1 then h = { t = now, n = 0 }; hist[a.AnimationId] = h end
-		h.n = h.n + 1
-		if h.n > 8 then
-			mode = "freeze"
-			pcall(function() tr:AdjustSpeed(0) end)
-			return
-		end
+		if counted then killed = killed + 1 end
 		pcall(function() tr:Stop(0) end)
 	end
 
@@ -5363,28 +5356,32 @@ state.silentStep = sv("silentStep", false); state.silentStepCloak = sv("silentSt
 		if animConn then pcall(function() animConn:Disconnect() end); animConn = nil end
 		local hum = c and c:FindFirstChildOfClass("Humanoid")
 		if not hum then return end
-		animConn = hum.AnimationPlayed:Connect(function(tr) if active() then suppress(tr) end end)
+		animConn = hum.AnimationPlayed:Connect(function(tr) if active() then suppress(tr, true) end end)
 		table.insert(H.conns, animConn)
 	end
 	hook(lp.Character)
-	con(lp.CharacterAdded, function(c) mode = "stop"; table.clear(hist); task.wait(0.2); hook(c) end)
+	con(lp.CharacterAdded, function(c) task.wait(0.2); hook(c) end)
 
-	-- schon laufende Tracks beim Einschalten erwischen + Zustandsanzeige
+	-- jeden Frame vor dem Animations-Schritt: laufende Schritt-Tracks stoppen (faengt auch alles ab, was
+	-- AnimationPlayed verpasst, z. B. schon laufende Tracks beim Einschalten oder beim Cloak-Start)
+	local RunSvc = game:GetService("RunService")
+	local ok, preAnim = pcall(function() return RunSvc.PreAnimation end)
+	con((ok and preAnim) or RunSvc.Stepped, function()
+		if not active() then return end
+		local c = lp.Character
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		local an = hum and hum:FindFirstChildOfClass("Animator")
+		if not an then return end
+		for _, tr in ipairs(an:GetPlayingAnimationTracks()) do
+			if tr.Animation and STEP[tr.Animation.AnimationId] then suppress(tr, false) end
+		end
+	end)
+	-- Zustandsanzeige
 	task.spawn(function()
 		while H.alive do
-			if active() then
-				local c = lp.Character
-				local hum = c and c:FindFirstChildOfClass("Humanoid")
-				local an = hum and hum:FindFirstChildOfClass("Animator")
-				if an then
-					for _, tr in ipairs(an:GetPlayingAnimationTracks()) do
-						if tr.Animation and STEP[tr.Animation.AnimationId] and tr.Speed ~= 0 then suppress(tr) end
-					end
-				end
-			end
-			ssInfo.Text = ("%s · %d step anims known · %d suppressed · mode %s · cloaked: %s"):format(
+			ssInfo.Text = ("%s · %d step anims known · %d suppressed · cloaked: %s"):format(
 				active() and "ACTIVE" or (state.silentStep and "waiting for cloak" or "off"),
-				nStep, killed, mode, cloaked() and "yes" or "no")
+				nStep, killed, cloaked() and "yes" or "no")
 			task.wait(0.25)
 		end
 	end)
