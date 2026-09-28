@@ -5598,7 +5598,6 @@ state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOn
 	folder.Name = "TSC_SENSE"; folder.Parent = workspace
 	local rings = {} -- [userId] = Kugel-Part
 	local bubbles = {}    -- [userId] = { pos =, col =, inside = }  Datenquelle fuer die 2D-Umrisslinie
-	local ringFrames = {} -- [userId] = Frame (Kreis)
 	local insideBorder = Instance.new("Frame")
 	insideBorder.Name = "TSC_SENSE_BORDER"; insideBorder.BackgroundTransparency = 1
 	insideBorder.Size = UDim2.fromScale(1, 1); insideBorder.Visible = false; insideBorder.Parent = espFolder
@@ -5613,7 +5612,6 @@ state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOn
 	local function killAllRings()
 		for id in pairs(rings) do killRing(id) end
 		table.clear(bubbles)
-		for _, fr in pairs(ringFrames) do fr.Visible = false end
 		insideBorder.Visible = false
 	end
 	-- ForceField-Kugel: rendert als durchscheinende Huelle, 1 Teil pro Traeger (statt 40 Ringsegmenten)
@@ -5663,49 +5661,15 @@ state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOn
 	info(S_sr, "300 studs is the measured Hivemind radius of the Light Specimen (InfectedUI.ClientSide, 'Magnitude <= 300', through walls). For RAH/RECON in general no radius is confirmed - the sphere shows that reference distance. Works whether or not you are infected.")
 	table.insert(H.conns, { Disconnect = function()
 		pcall(function() folder:Destroy() end)
-		for _, fr in pairs(ringFrames) do pcall(function() fr:Destroy() end) end
 		pcall(function() insideBorder:Destroy() end)
 	end })
 
-	local function circleFor(id, col)
-		local fr = ringFrames[id]
-		if not fr then
-			fr = Instance.new("Frame")
-			fr.Name = "TSC_SENSE_CIRCLE"; fr.BackgroundTransparency = 1; fr.BorderSizePixel = 0
-			fr.AnchorPoint = Vector2.new(0.5, 0.5); fr.ZIndex = 0; fr.Parent = espFolder
-			Instance.new("UICorner", fr).CornerRadius = UDim.new(1, 0)
-			local st = Instance.new("UIStroke")
-			st.Thickness = 3; st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; st.Parent = fr
-			ringFrames[id] = fr
-		end
-		local st = fr:FindFirstChildOfClass("UIStroke")
-		if st and st.Color ~= col then st.Color = col end
-		return fr
-	end
+	-- Umrisslinie entfernt (User 28.09.). Es bleibt der rote Bildrand, solange man in einer Blase steht.
 	con(RunService.RenderStepped, function()
-		if not next(bubbles) then
-			if insideBorder.Visible then insideBorder.Visible = false end
-			return
+		local anyInside = false
+		for _, b in pairs(bubbles) do
+			if b.inside then anyInside = true break end
 		end
-		local vp = cam.ViewportSize
-		local fl = (vp.Y / 2) / math.tan(math.rad(cam.FieldOfView) / 2)
-		local camPos = cam.CFrame.Position
-		local anyInside, used = false, {}
-		for id, b in pairs(bubbles) do
-			if b.inside then anyInside = true end
-			local d = (b.pos - camPos).Magnitude
-			local sp = cam:WorldToViewportPoint(b.pos)
-			-- innen ergibt ein Umriss keinen Sinn (Kugel umschliesst die Kamera) -> dann nur der rote Bildrand
-			if d > state.senseRange and sp.Z > 0 then
-				local rs = state.senseRange * fl / math.max(d, 1)
-				local fr = circleFor(id, b.col)
-				fr.Size = UDim2.fromOffset(math.floor(rs * 2 + 0.5), math.floor(rs * 2 + 0.5))
-				fr.Position = UDim2.fromOffset(math.floor(sp.X + 0.5), math.floor(sp.Y + 0.5))
-				fr.Visible = true
-				used[id] = true
-			end
-		end
-		for id, fr in pairs(ringFrames) do if not used[id] and fr.Visible then fr.Visible = false end end
 		if insideBorder.Visible ~= anyInside then insideBorder.Visible = anyInside end
 	end)
 
