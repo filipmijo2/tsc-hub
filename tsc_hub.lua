@@ -5479,36 +5479,49 @@ state.cmdFx = sv("cmdFx", true)
 
 	local FX = { ForceField = true, Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, Highlight = true, ParticleEmitter = true }
 	local lastDeath, lastTeam, lastPos = {}, {}, {}
+	local spawnAt, seenSince = {}, {} -- Zeitpunkt des letzten Character-Spawns / seit wann wir den Spieler sehen
+	-- Spieler im Spawn-Menue spawnen dauernd neu -> komplett ignorieren
+	local function ignored(pl) return (pl.Team and pl.Team.Name == "Menu") or false end
+	local function fresh(pl, sec) local t = spawnAt[pl.UserId] return t ~= nil and os.clock() - t < sec end
 
 	local function hookHumanoid(pl, c, hum)
 		if not hum then return end
 		con(hum.Died, function() lastDeath[pl.UserId] = os.clock() end)
 		local mh = hum.MaxHealth
 		con(hum:GetPropertyChangedSignal("MaxHealth"), function()
-			if state.cmdFx and hum.MaxHealth ~= mh then
-				say(nameOf(pl), ("MaxHealth %d -> %d"):format(mh, hum.MaxHealth), false)
-				mh = hum.MaxHealth
+			-- kleine Schritte sind die Diceroll-Statpunkte des Spiels (+2 pro Punkt), kein Befehl
+			if state.cmdFx and not ignored(pl) and math.abs(hum.MaxHealth - mh) >= 25 then
+				say(nameOf(pl), ("MaxHealth %d -> %d (:health?)"):format(mh, hum.MaxHealth), false)
 			end
+			mh = hum.MaxHealth
 		end)
 		-- WalkSpeed: das Spiel selbst geht bis ~32 (PanicRun). Erst darueber ist es ein Befehl.
 		con(hum:GetPropertyChangedSignal("WalkSpeed"), function()
-			if state.cmdFx and hum.WalkSpeed > 40 then say(nameOf(pl), ("WalkSpeed %.0f (:speed?)"):format(hum.WalkSpeed)) end
+				if state.cmdFx and not ignored(pl) and hum.WalkSpeed > 40 then say(nameOf(pl), ("WalkSpeed %.0f (:speed?)"):format(hum.WalkSpeed)) end
 		end)
 		con(hum:GetPropertyChangedSignal("JumpPower"), function()
-			if state.cmdFx and hum.JumpPower > 60 then say(nameOf(pl), ("JumpPower %.0f (:jumppower?)"):format(hum.JumpPower)) end
+			if state.cmdFx and not ignored(pl) and hum.JumpPower > 60 then say(nameOf(pl), ("JumpPower %.0f (:jumppower?)"):format(hum.JumpPower)) end
 		end)
 	end
 
 	local function hookChar(pl, c)
 		-- Respawn ohne vorherigen Tod = :respawn / :reset durch einen Admin
 		local d = lastDeath[pl.UserId]
-		if state.cmdFx and (not d or os.clock() - d > 3) and lastPos[pl.UserId] then
+		local since = seenSince[pl.UserId]
+		-- nur melden, wenn der Spieler vorher >=10 s mit lebendem Character da war und nicht gestorben ist
+		if state.cmdFx and not ignored(pl) and (not d or os.clock() - d > 3)
+			and lastPos[pl.UserId] and since and os.clock() - since > 10 then
 			say(nameOf(pl), "respawned without dying (:respawn?)")
 		end
 		lastDeath[pl.UserId] = nil
+		spawnAt[pl.UserId] = os.clock()
+		seenSince[pl.UserId] = seenSince[pl.UserId] or os.clock()
 		hookHumanoid(pl, c, c:FindFirstChildOfClass("Humanoid"))
 		con(c.ChildAdded, function(ch)
-			if state.cmdFx and FX[ch.ClassName] then say(nameOf(pl), ch.ClassName .. " added (:" .. ch.ClassName:lower() .. "?)") end
+			-- ForceField & Co. in den ersten Sekunden nach dem Spawn = Spawnschutz des Spiels
+			if state.cmdFx and FX[ch.ClassName] and not ignored(pl) and not fresh(pl, 8) then
+				say(nameOf(pl), ch.ClassName .. " added (:" .. ch.ClassName:lower() .. "?)")
+			end
 		end)
 	end
 
@@ -5518,7 +5531,9 @@ state.cmdFx = sv("cmdFx", true)
 			local new = pl.Team and pl.Team.Name or "-"
 			local old = lastTeam[pl.UserId] or "-"
 			lastTeam[pl.UserId] = new
-			if state.cmdFx and new ~= old then say(pl.Name, ("team %s -> %s"):format(old, new), false) end
+			if state.cmdFx and new ~= old and old ~= "Menu" and new ~= "Menu" then
+				say(pl.Name, ("team %s -> %s"):format(old, new), false)
+			end
 		end)
 		if pl.Character then hookChar(pl, pl.Character) end
 		con(pl.CharacterAdded, function(c) task.wait(0.3) hookChar(pl, c) end)
@@ -5526,8 +5541,9 @@ state.cmdFx = sv("cmdFx", true)
 	for _, pl in ipairs(Players:GetPlayers()) do if pl ~= lp then hookPlayer(pl) end end
 	con(Players.PlayerAdded, hookPlayer)
 	con(Players.PlayerRemoving, function(pl)
-		if state.cmdFx then say(pl.Name, "left the server (kick/ban?)", false) end
+		if state.cmdFx and not ignored(pl) then say(pl.Name, "left the server (kick/ban?)", false) end
 		lastDeath[pl.UserId] = nil; lastTeam[pl.UserId] = nil; lastPos[pl.UserId] = nil
+		spawnAt[pl.UserId] = nil; seenSince[pl.UserId] = nil
 	end)
 	if lp.Character then hookChar(lp, lp.Character) end
 	con(lp.CharacterAdded, function(c) task.wait(0.3) hookChar(lp, c) end)
@@ -5543,10 +5559,12 @@ state.cmdFx = sv("cmdFx", true)
 					if r and c:IsDescendantOf(workspace) then
 						local last = lastPos[pl.UserId]
 						local now = r.Position
-						if last then
+						-- Respawn versetzt den Character selbst um beliebig viel -> kurz danach nicht melden
+						if last and not ignored(pl) and not fresh(pl, 4) then
 							local d = (now - last).Magnitude
 							if d > 150 then say(nameOf(pl), ("teleported %.0f studs (:tp/:bring?)"):format(d)) end
 						end
+						seenSince[pl.UserId] = seenSince[pl.UserId] or os.clock()
 						lastPos[pl.UserId] = now
 					else
 						lastPos[pl.UserId] = nil
