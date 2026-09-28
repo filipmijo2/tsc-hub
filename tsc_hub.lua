@@ -220,6 +220,7 @@ end
 
 local refresh = {}
 local ctl = {} -- Config: [id] = {get=, set=}
+H.ctl = ctl -- Panik-Modus schaltet damit alles ueber die echten Aus-Handler ab
 local function toggle(S, label, key, onChange, bindId)
 	local row = Instance.new("TextButton")
 	row.AutoButtonColor = false; row.BackgroundTransparency = 1; row.Text = ""; row.Size = UDim2.new(1, 0, 0, 18)
@@ -5951,17 +5952,22 @@ function H.kill()
 	pcall(function() gui:Destroy() end)
 end
 
--- ================= PANIC BUTTON =================
--- Shift + G (Taste umbelegbar): Hub komplett entfernen. Laeuft ueber H.kill, das hier erweitert wird, weil das
--- Original den Nebel nicht zurueckgesetzt und _G.__TSC_HUB stehen gelassen hat. Danach ist nichts mehr aktiv:
--- alle Verbindungen getrennt, alle gepatchten Werte (No Spread/Max Charge/Kill Aura/Damage Zones/Fullbright/
--- Performance/Fake Tools) zurueckgesetzt, Kamera zurueck auf den eigenen Character, eigene GUIs zerstoert.
--- Neu laden geht wie immer ueber das Loadstring. Zusaetzlich ein Knopf unter Options > Panic.
+-- ================= PANIC =================
+-- Zwei getrennte Aktionen:
+--  * Shift + G (Taste umbelegbar) = Panik: schaltet JEDES Feature ueber dessen eigenen Aus-Handler ab, damit
+--    gepatchte Werte (No Spread/Max Charge/Kill Aura/Damage Zones/Fullbright/Performance/Fake Tools/Kamera)
+--    korrekt zurueckgesetzt werden, und versteckt das Hub-Fenster. AUSNAHME: der Staff Radar (Admin-ESP) bleibt
+--    an -- man will ja sehen, wann die Admins wieder weg sind (User 28.09.).
+--  * Knopf "Remove hub completely" = H.kill: zusaetzlich alle Verbindungen trennen und die GUIs zerstoeren.
+--    H.kill ist hier erweitert, weil das Original den Nebel nicht zurueckgesetzt und _G.__TSC_HUB stehen gelassen hat.
 ;(function()
+	local KEEP = { staff = true } -- was der Panik-Modus NICHT anfasst
 	state.keys.panic = kc(sv("keyPanic", "G"), Enum.KeyCode.G)
 	local S_panic = section(optL, "Panic")
 	keyRow(S_panic, "Panic key (hold Shift)", "panic")
-	info(S_panic, "Shift + key removes the hub completely: connections closed, patched values restored, camera reset, GUIs destroyed. Reload with the loadstring.")
+	local pInfo = info(S_panic, "ready", T.accent)
+	info(S_panic, "Shift + key: every feature off via its own restore path, hub window hidden - but the Staff Radar keeps running so you can see when the admins are gone. The button below additionally closes all connections and destroys the GUIs.")
+
 	local origKill = H.kill
 	H.kill = function()
 		pcall(restoreNoFog)
@@ -5970,12 +5976,31 @@ end
 		pcall(function() RunService:UnbindFromRenderStep("TSC_VIEW") end)
 		_G.__TSC_HUB = nil
 	end
-	button(S_panic, "PANIC - remove hub now", function() task.spawn(function() pcall(H.kill) end) end)
+
+	function H.panic()
+		local off, kept = 0, {}
+		for key, c in pairs(H.ctl) do
+			if KEEP[key] then
+				kept[#kept + 1] = key
+			elseif c.get() then
+				pcall(c.set, false)
+				off = off + 1
+			end
+		end
+		pcall(function() if H.viewStop then H.viewStop() end end)
+		pcall(restoreNoFog)
+		main.Visible = false
+		H.panicked = true
+		pInfo.Text = ("PANIC: %d features off, kept: %s"):format(off, #kept > 0 and table.concat(kept, ", ") or "-")
+		return off
+	end
+
+	button(S_panic, "Remove hub completely", function() task.spawn(function() pcall(H.kill) end) end)
 	con(UIS.InputBegan, function(i, gp)
 		if gp or i.UserInputType ~= Enum.UserInputType.Keyboard then return end
 		if not keyMatch(i, state.keys.panic) then return end
 		if not (UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)) then return end
-		task.spawn(function() pcall(H.kill) end)
+		task.spawn(function() pcall(H.panic) end)
 	end)
 end)()
 
