@@ -5468,7 +5468,7 @@ state.cmdFx = sv("cmdFx", true)
 	local S_fx = section(plR, "Command Effects")
 	toggle(S_fx, "Detect Command Effects", "cmdFx", function() end)
 	local fxInfo = info(S_fx, "")
-	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This logs the visible effects instead: team change, respawn without death, forcefield/sparkles, health/speed changes, teleports, leaves.")
+	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This watches the visible effects instead: team change, sparkles/fire/highlight, health/speed changes, teleports over 150 studs, leaves.")
 
 	local n = 0
 	local function say(who, what, hot)
@@ -5477,7 +5477,7 @@ state.cmdFx = sv("cmdFx", true)
 	end
 	local function nameOf(pl) return pl.Name .. (pl.Team and (" [" .. pl.Team.Name .. "]") or "") end
 
-	local FX = { ForceField = true, Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, Highlight = true, ParticleEmitter = true }
+	local FX = { Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, Highlight = true, ParticleEmitter = true }
 	local lastDeath, lastTeam, lastPos = {}, {}, {}
 	local spawnAt, seenSince = {}, {} -- Zeitpunkt des letzten Character-Spawns / seit wann wir den Spieler sehen
 	-- Spieler im Spawn-Menue spawnen dauernd neu -> komplett ignorieren
@@ -5506,13 +5506,8 @@ state.cmdFx = sv("cmdFx", true)
 
 	local function hookChar(pl, c)
 		-- Respawn ohne vorherigen Tod = :respawn / :reset durch einen Admin
-		local d = lastDeath[pl.UserId]
-		local since = seenSince[pl.UserId]
-		-- nur melden, wenn der Spieler vorher >=10 s mit lebendem Character da war und nicht gestorben ist
-		if state.cmdFx and not ignored(pl) and (not d or os.clock() - d > 3)
-			and lastPos[pl.UserId] and since and os.clock() - since > 10 then
-			say(nameOf(pl), "respawned without dying (:respawn?)")
-		end
+		-- Respawn-Erkennung bewusst entfernt (User 28.09.): das Spiel spawnt Characters zu unregelmaessig neu,
+		-- daraus laesst sich kein :respawn ableiten. lastDeath bleibt nur fuer den Teleport-Filter.
 		lastDeath[pl.UserId] = nil
 		spawnAt[pl.UserId] = os.clock()
 		seenSince[pl.UserId] = seenSince[pl.UserId] or os.clock()
