@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5291,6 +5291,101 @@ state.view = sv("view", false)
 			local cs = RSto:FindFirstChild("Remotes") and RSto.Remotes:FindFirstChild("ContentStreaming")
 			local ra = cs and cs:FindFirstChild("RequestStreamAround")
 			if ra then pcall(function() ra:FireServer(pos) end) end
+		end
+	end)
+end)()
+
+-- ================= SILENT STEPS =================
+-- Schrittgeraeusche entstehen NICHT auf dem Server: PlayerScripts.FrameworkActor.FrameworkClient.Playerstates
+-- registriert pro Character einen Listener auf Humanoid.AnimationPlayed und haengt sich an
+-- track:GetMarkerReachedSignal("footstep"). Jeder Zuhoerer klont dann selbst einen Sound aus
+-- ReplicatedStorage.Sounds.Footsteps[<Material>] in den Torso (nur <= 120 Studs von seiner Kamera).
+-- Heisst: laeuft bei MIR keine Lauf-Animation, kann kein fremder Client einen Schritt-Marker erreichen
+-- -> niemand hoert mich, und niemand sieht die Laufanimation. Rein lokal, kein Remote, kein Hook.
+-- Cloak deckt den Ton NICHT ab (im Cloak-Script gibt es keine Sound-Behandlung), darum dieses Feature.
+-- Betroffene Animationen (aus Modules.Animations.Backtrack): walk, run, panicrun, crouch, crawl, gunwalk, climb.
+-- Standard ist Stop(0) — sieht fuer andere wie Stillstehen aus. Spielt das Framework die Animation danach
+-- sofort wieder (Churn), wird automatisch auf Speed 0 umgestellt: der Track bleibt "laufend", erreicht aber
+-- nie einen Marker, also garantiert still (dafuer fuer andere eine eingefrorene Pose).
+state.silentStep = sv("silentStep", false); state.silentStepCloak = sv("silentStepCloak", false)
+;(function()
+	local RSss = game:GetService("ReplicatedStorage")
+	local STEP, nStep = {}, 0
+	do
+		local ok, A = pcall(require, RSss.Modules.Animations)
+		if ok and type(A) == "table" and type(A.Backtrack) == "table" then
+			local want = { walk = true, run = true, panicrun = true, crouch = true, crawl = true, gunwalk = true, climb = true }
+			for id, nm in pairs(A.Backtrack) do if want[nm] then STEP[id] = nm; nStep = nStep + 1 end end
+		end
+	end
+
+	local S_ss = section(miscL, "Silent Steps")
+	toggle(S_ss, "Silent Steps", "silentStep", function() end)
+	toggle(S_ss, "Only while cloaked", "silentStepCloak", function() end)
+	local ssInfo = info(S_ss, "")
+	info(S_ss, "Footsteps are produced by every listener's own client from your walk animation. No walk animation = nobody can hear you. Cloak alone does not silence steps.")
+
+	local killed, mode, hist = 0, "stop", {}
+	-- cloaked: NameHidden ist der serverseitige Tarn-Marker (siehe Cloak-Recon 27.09.)
+	local function cloaked()
+		local c = lp.Character
+		return (c and c:GetAttribute("NameHidden") == true) or false
+	end
+	local function active()
+		if not state.silentStep then return false end
+		if state.silentStepCloak and not cloaked() then return false end
+		return true
+	end
+
+	local function suppress(tr)
+		local a = tr.Animation
+		if not a or not STEP[a.AnimationId] then return end
+		killed = killed + 1
+		if mode == "freeze" then
+			pcall(function() tr:AdjustSpeed(0) end)
+			return
+		end
+		-- Churn-Erkennung: dieselbe Animation mehr als 8x in einer Sekunde -> einfrieren statt stoppen
+		local now = os.clock()
+		local h = hist[a.AnimationId]
+		if not h or now - h.t > 1 then h = { t = now, n = 0 }; hist[a.AnimationId] = h end
+		h.n = h.n + 1
+		if h.n > 8 then
+			mode = "freeze"
+			pcall(function() tr:AdjustSpeed(0) end)
+			return
+		end
+		pcall(function() tr:Stop(0) end)
+	end
+
+	local animConn
+	local function hook(c)
+		if animConn then pcall(function() animConn:Disconnect() end); animConn = nil end
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		animConn = hum.AnimationPlayed:Connect(function(tr) if active() then suppress(tr) end end)
+		table.insert(H.conns, animConn)
+	end
+	hook(lp.Character)
+	con(lp.CharacterAdded, function(c) mode = "stop"; table.clear(hist); task.wait(0.2); hook(c) end)
+
+	-- schon laufende Tracks beim Einschalten erwischen + Zustandsanzeige
+	task.spawn(function()
+		while H.alive do
+			if active() then
+				local c = lp.Character
+				local hum = c and c:FindFirstChildOfClass("Humanoid")
+				local an = hum and hum:FindFirstChildOfClass("Animator")
+				if an then
+					for _, tr in ipairs(an:GetPlayingAnimationTracks()) do
+						if tr.Animation and STEP[tr.Animation.AnimationId] and tr.Speed ~= 0 then suppress(tr) end
+					end
+				end
+			end
+			ssInfo.Text = ("%s · %d step anims known · %d suppressed · mode %s · cloaked: %s"):format(
+				active() and "ACTIVE" or (state.silentStep and "waiting for cloak" or "off"),
+				nStep, killed, mode, cloaked() and "yes" or "no")
+			task.wait(0.25)
 		end
 	end)
 end)()
