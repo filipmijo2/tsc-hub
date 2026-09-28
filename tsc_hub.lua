@@ -5468,7 +5468,7 @@ state.cmdFx = sv("cmdFx", true)
 	local S_fx = section(plR, "Command Effects")
 	toggle(S_fx, "Detect Command Effects", "cmdFx", function() end)
 	local fxInfo = info(S_fx, "")
-	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This watches the visible effects instead: team change, sparkles/fire/highlight, health/speed changes, teleports over 150 studs, leaves.")
+	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This watches the visible effects instead: team change, sparkles/fire/smoke, health/speed changes, teleports over 150 studs, leaves.")
 
 	local n = 0
 	local function say(who, what, hot)
@@ -5477,7 +5477,7 @@ state.cmdFx = sv("cmdFx", true)
 	end
 	local function nameOf(pl) return pl.Name .. (pl.Team and (" [" .. pl.Team.Name .. "]") or "") end
 
-	local FX = { Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, Highlight = true, ParticleEmitter = true }
+	local FX = { Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, ParticleEmitter = true }
 	local lastDeath, lastTeam, lastPos = {}, {}, {}
 	local spawnAt, seenSince = {}, {} -- Zeitpunkt des letzten Character-Spawns / seit wann wir den Spieler sehen
 	-- Spieler im Spawn-Menue spawnen dauernd neu -> komplett ignorieren
