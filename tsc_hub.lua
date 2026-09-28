@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "sensePos" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5538,6 +5538,157 @@ state.cmdFx = sv("cmdFx", true)
 		while H.alive do
 			fxInfo.Text = ("%s · %d effects logged"):format(state.cmdFx and "watching" or "off", n)
 			task.wait(0.5)
+		end
+	end)
+end)()
+
+-- ================= SENSE RANGE (RAH / RECON) =================
+-- Warnkreis um jeden Spieler im Team RAH oder Recontainment Unit. Hintergrund: der Light Specimen hat in
+-- PlayerGui.InfectedUI.ClientSide einen "Hivemind"-Loop, der jeden Spieler im Umkreis von GENAU 300 Studs mit einem
+-- Highlight versieht (DepthMode AlwaysOnTop, also durch Waende) und nach InfectedCheckModule einfaerbt: rot =
+-- infiziert, gruen = ebenfalls LightInfected, weiss = nicht infiziert. Das laeuft im Client des Specimen, ist von
+-- aussen nicht abschaltbar -- man kann nur wissen, wann man drin ist. Genau das macht dieses Feature.
+-- 300 ist der gemessene Hivemind-Radius; fuer RAH/RECON allgemein ist keine Reichweite bestaetigt, der Ring zeigt
+-- also diese Referenzdistanz (per Slider aenderbar).
+-- Ringe sind lokale, nicht kollidierende Neon-Teile (fuer andere unsichtbar, kein Remote). Nur die 3 naechsten
+-- Traeger bekommen einen Ring, Update 5 Hz, damit nichts ruckelt. Ziel-Position notfalls aus lastSeen.
+state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 300); state.senseRings = sv("senseRings", true)
+;(function()
+	local TEAMS = { RAH = true, ["Recontainment Unit"] = true }
+	local SEG = 40
+	local MAXRINGS = 3
+
+	local S_sr = section(visR, "RAH / RECON Range")
+	local ov = Instance.new("TextLabel")
+	ov.AnchorPoint = Vector2.new(0.5, 0); ov.Position = UDim2.new(0.5, 0, 0, 120); ov.Size = UDim2.fromOffset(420, 0)
+	ov.AutomaticSize = Enum.AutomaticSize.Y; ov.BackgroundColor3 = Color3.fromRGB(10, 10, 12); ov.BackgroundTransparency = 0.35
+	ov.Font = Enum.Font.GothamBold; ov.TextSize = 14; ov.TextColor3 = Color3.fromRGB(255, 90, 90)
+	ov.TextWrapped = true; ov.RichText = true; ov.Visible = false; ov.Parent = gui
+	Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 4)
+	local sp = Instance.new("UIPadding", ov); sp.PaddingLeft = UDim.new(0, 8); sp.PaddingRight = UDim.new(0, 8)
+	sp.PaddingTop = UDim.new(0, 4); sp.PaddingBottom = UDim.new(0, 4)
+	H.movable(ov, "sensePos")
+
+	local folder = Instance.new("Folder")
+	folder.Name = "TSC_SENSE"; folder.Parent = workspace
+	local rings = {} -- [userId] = { model = , parts = {} }
+
+	local function killRing(id)
+		local r = rings[id]
+		if r then pcall(function() r.model:Destroy() end); rings[id] = nil end
+	end
+	local function killAllRings() for id in pairs(rings) do killRing(id) end end
+	local function newRing(col)
+		local m = Instance.new("Model")
+		m.Name = "TSC_SENSE_RING"; m.Parent = folder
+		local parts = {}
+		for i = 1, SEG do
+			local p = Instance.new("Part")
+			p.Anchored = true; p.CanCollide = false; p.CanQuery = false; p.CanTouch = false
+			p.Material = Enum.Material.Neon; p.Color = col; p.Transparency = 0.25; p.CastShadow = false
+			p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+			p.Size = Vector3.new(1, 0.6, 1); p.Parent = m
+			parts[i] = p
+		end
+		return { model = m, parts = parts }
+	end
+
+	local rayP = RaycastParams.new()
+	rayP.FilterType = Enum.RaycastFilterType.Exclude
+	local function groundY(pos, ignore)
+		rayP.FilterDescendantsInstances = { folder, lp.Character, ignore }
+		local r = workspace:Raycast(pos + Vector3.new(0, 6, 0), Vector3.new(0, -400, 0), rayP)
+		return r and r.Position.Y or (pos.Y - 3)
+	end
+	local function drawRing(ring, center, radius)
+		local seg = 2 * math.pi * radius / SEG
+		for i, p in ipairs(ring.parts) do
+			local a = (i - 1) / SEG * math.pi * 2
+			local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+			p.Size = Vector3.new(seg * 1.05, 0.6, 1.2)
+			p.CFrame = CFrame.lookAt(center + dir * radius, center + dir * radius + Vector3.new(-dir.Z, 0, dir.X))
+		end
+	end
+
+	-- Position: live aus dem Character, sonst letzte bekannte (lastSeen, oben mit 2 Hz gefuellt)
+	local function posOf(pl)
+		local c = pl.Character
+		local r = c and c:FindFirstChild("HumanoidRootPart")
+		if r and c:IsDescendantOf(workspace) then return r.Position, true, c end
+		local ls = lastSeen[pl.UserId]
+		return ls and ls.pos or nil, false, nil
+	end
+
+	toggle(S_sr, "Warn: RAH / RECON range", "senseWarn", function(on)
+		if not on then killAllRings(); ov.Visible = false end
+	end)
+	toggle(S_sr, "Rings on ground", "senseRings", function(on) if not on then killAllRings() end end)
+	slider(S_sr, "Range", 50, 600, state.senseRange, function(v)
+		state.senseRange = math.floor(v + 0.5); return state.senseRange .. " studs"
+	end, "senseRange")
+	local srInfo = info(S_sr, "")
+	info(S_sr, "300 studs is the measured Hivemind radius of the Light Specimen (InfectedUI.ClientSide, 'Magnitude <= 300', through walls). For RAH/RECON in general no radius is confirmed - the ring shows that reference distance. Works whether or not you are infected.")
+	table.insert(H.conns, { Disconnect = function() pcall(function() folder:Destroy() end) end })
+
+	task.spawn(function()
+		while H.alive do
+			if state.senseWarn then
+				local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+				local me = myRoot and myRoot.Position
+				local found = {}
+				for _, pl in ipairs(Players:GetPlayers()) do
+					if pl ~= lp and pl.Team and TEAMS[pl.Team.Name] then
+						local pos, live = posOf(pl)
+						if pos and me then
+							found[#found + 1] = { pl = pl, pos = pos, live = live,
+								d = (pos - me).Magnitude, team = pl.Team.Name }
+						end
+					end
+				end
+				table.sort(found, function(a, b) return a.d < b.d end)
+
+				-- Ringe nur fuer die naechsten Traeger, und nur wenn sie ueberhaupt relevant nah sind
+				local keep = {}
+				if state.senseRings then
+					for i = 1, math.min(#found, MAXRINGS) do
+						local f = found[i]
+						if f.d <= state.senseRange * 2.5 then
+							keep[f.pl.UserId] = true
+							local inside = f.d <= state.senseRange
+							local col = inside and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 190, 60)
+							local ring = rings[f.pl.UserId]
+							if not ring then ring = newRing(col); rings[f.pl.UserId] = ring end
+							for _, p in ipairs(ring.parts) do if p.Color ~= col then p.Color = col end end
+							local y = groundY(f.pos, f.pl.Character)
+							drawRing(ring, Vector3.new(f.pos.X, y + 0.4, f.pos.Z), state.senseRange)
+						end
+					end
+				end
+				for id in pairs(rings) do if not keep[id] then killRing(id) end end
+
+				-- Overlay: wer kann mich sehen
+				local insideList, nearList = {}, {}
+				for _, f in ipairs(found) do
+					local tag = f.team == "RAH" and "RAH" or "RECON"
+					local txt2 = ("%s %s %.0fm%s"):format(tag, f.pl.Name, f.d, f.live and "" or " (stale)")
+					if f.d <= state.senseRange then insideList[#insideList + 1] = txt2
+					elseif #nearList < 3 then nearList[#nearList + 1] = txt2 end
+				end
+				if #insideList > 0 then
+					ov.Text = ('<font color="#ff4040">IN SENSE RANGE (%d studs)</font>  '):format(state.senseRange)
+						.. table.concat(insideList, "  ·  ")
+					ov.Visible = true
+				elseif #nearList > 0 then
+					ov.Text = '<font color="#ffbe3c">clear</font>  ' .. table.concat(nearList, "  ·  ")
+					ov.Visible = true
+				else
+					ov.Visible = false
+				end
+				srInfo.Text = ("%d RAH/RECON online · %d in range"):format(#found, #insideList)
+			else
+				srInfo.Text = "off"
+			end
+			task.wait(0.2)
 		end
 	end)
 end)()
