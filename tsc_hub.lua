@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4550,6 +4550,7 @@ state.adonisOverlay = sv("adonisOverlay", false)
 		while #log > MAXLOG do table.remove(log, 1) end
 		fileBuf[#fileBuf + 1] = ("[%s] %s %s"):format(e.t, kind, text)
 	end
+	H.adLog = add -- Command Effects schreibt in dasselbe Log
 	toggle(S_ad, "Monitor Adonis + Chat Commands", "adonisMon", function() end)
 	toggle(S_ad, "Adonis Overlay", "adonisOverlay", function() end)
 	local adInfo = info(S_ad, "")
@@ -5448,6 +5449,111 @@ state.silentStep = sv("silentStep", false); state.silentStepCloak = sv("silentSt
 			ssInfo.Text = ("%s · %d step anims known · %d suppressed · cloaked: %s"):format(
 				active() and "ACTIVE" or (state.silentStep and "waiting for cloak" or "off"),
 				nStep, killed, cloaked() and "yes" or "no")
+			task.wait(0.25)
+		end
+	end)
+end)()
+
+-- ================= COMMAND EFFECTS =================
+-- Warum der Adonis-Monitor NICHT alle Befehle sieht: Admins tippen sie meist nicht in den Chat, sondern in Adonis'
+-- eigene Befehlsleiste. Die geht direkt von IHREM Client an den Server — fremde Client->Server-Pakete sind fuer uns
+-- prinzipiell unsichtbar, und Chat-Befehle filtert Adonis vor dem Verteilen raus. Wir sehen also nur, was der Server
+-- an UNS zurueckschickt (Hints/Messages/Notifications) — der Rest kommt nie bei uns an.
+-- Was aber immer ankommt, sind die WIRKUNGEN, weil das normale Replikation ist: Team, Respawn ohne Tod, MaxHealth,
+-- hohe WalkSpeed, ForceField/Sparkles/Fire/Smoke am Character, grosse Positionssprünge, Verlassen des Servers.
+-- Alles ereignisgesteuert (nur der Teleport-Check pollt mit 4 Hz ueber lebende Characters), Ausgabe in denselben
+-- Adonis-Log (Tab + Overlay + tsc_adonis_log.txt).
+state.cmdFx = sv("cmdFx", true)
+;(function()
+	local S_fx = section(plR, "Command Effects")
+	toggle(S_fx, "Detect Command Effects", "cmdFx", function() end)
+	local fxInfo = info(S_fx, "")
+	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This logs the visible effects instead: team change, respawn without death, forcefield/sparkles, health/speed changes, teleports, leaves.")
+
+	local n = 0
+	local function say(who, what, hot)
+		n = n + 1
+		if H.adLog then H.adLog("EFFECT", ("%s  ->  %s"):format(who, what), hot ~= false) end
+	end
+	local function nameOf(pl) return pl.Name .. (pl.Team and (" [" .. pl.Team.Name .. "]") or "") end
+
+	local FX = { ForceField = true, Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, Highlight = true, ParticleEmitter = true }
+	local lastDeath, lastTeam, lastPos = {}, {}, {}
+
+	local function hookHumanoid(pl, c, hum)
+		if not hum then return end
+		con(hum.Died, function() lastDeath[pl.UserId] = os.clock() end)
+		local mh = hum.MaxHealth
+		con(hum:GetPropertyChangedSignal("MaxHealth"), function()
+			if state.cmdFx and hum.MaxHealth ~= mh then
+				say(nameOf(pl), ("MaxHealth %d -> %d"):format(mh, hum.MaxHealth), false)
+				mh = hum.MaxHealth
+			end
+		end)
+		-- WalkSpeed: das Spiel selbst geht bis ~32 (PanicRun). Erst darueber ist es ein Befehl.
+		con(hum:GetPropertyChangedSignal("WalkSpeed"), function()
+			if state.cmdFx and hum.WalkSpeed > 40 then say(nameOf(pl), ("WalkSpeed %.0f (:speed?)"):format(hum.WalkSpeed)) end
+		end)
+		con(hum:GetPropertyChangedSignal("JumpPower"), function()
+			if state.cmdFx and hum.JumpPower > 60 then say(nameOf(pl), ("JumpPower %.0f (:jumppower?)"):format(hum.JumpPower)) end
+		end)
+	end
+
+	local function hookChar(pl, c)
+		-- Respawn ohne vorherigen Tod = :respawn / :reset durch einen Admin
+		local d = lastDeath[pl.UserId]
+		if state.cmdFx and (not d or os.clock() - d > 3) and lastPos[pl.UserId] then
+			say(nameOf(pl), "respawned without dying (:respawn?)")
+		end
+		lastDeath[pl.UserId] = nil
+		hookHumanoid(pl, c, c:FindFirstChildOfClass("Humanoid"))
+		con(c.ChildAdded, function(ch)
+			if state.cmdFx and FX[ch.ClassName] then say(nameOf(pl), ch.ClassName .. " added (:" .. ch.ClassName:lower() .. "?)") end
+		end)
+	end
+
+	local function hookPlayer(pl)
+		lastTeam[pl.UserId] = pl.Team and pl.Team.Name or "-"
+		con(pl:GetPropertyChangedSignal("Team"), function()
+			local new = pl.Team and pl.Team.Name or "-"
+			local old = lastTeam[pl.UserId] or "-"
+			lastTeam[pl.UserId] = new
+			if state.cmdFx and new ~= old then say(pl.Name, ("team %s -> %s"):format(old, new), false) end
+		end)
+		if pl.Character then hookChar(pl, pl.Character) end
+		con(pl.CharacterAdded, function(c) task.wait(0.3) hookChar(pl, c) end)
+	end
+	for _, pl in ipairs(Players:GetPlayers()) do if pl ~= lp then hookPlayer(pl) end end
+	con(Players.PlayerAdded, hookPlayer)
+	con(Players.PlayerRemoving, function(pl)
+		if state.cmdFx then say(pl.Name, "left the server (kick/ban?)", false) end
+		lastDeath[pl.UserId] = nil; lastTeam[pl.UserId] = nil; lastPos[pl.UserId] = nil
+	end)
+	if lp.Character then hookChar(lp, lp.Character) end
+	con(lp.CharacterAdded, function(c) task.wait(0.3) hookChar(lp, c) end)
+
+	-- Teleports: nur grosse Spruenge, und nur wenn der Character vorher UND nachher wirklich gestreamt war
+	-- (sonst melden Streaming-Sprunge Unsinn). Aufzuege/Zuege bewegen sich langsamer als 150 Studs pro 0.25 s.
+	task.spawn(function()
+		while H.alive do
+			if state.cmdFx then
+				for _, pl in ipairs(Players:GetPlayers()) do
+					local c = pl.Character
+					local r = c and c:FindFirstChild("HumanoidRootPart")
+					if r and c:IsDescendantOf(workspace) then
+						local last = lastPos[pl.UserId]
+						local now = r.Position
+						if last then
+							local d = (now - last).Magnitude
+							if d > 150 then say(nameOf(pl), ("teleported %.0f studs (:tp/:bring?)"):format(d)) end
+						end
+						lastPos[pl.UserId] = now
+					else
+						lastPos[pl.UserId] = nil
+					end
+				end
+			end
+			fxInfo.Text = ("%s · %d effects logged"):format(state.cmdFx and "watching" or "off", n)
 			task.wait(0.25)
 		end
 	end)
