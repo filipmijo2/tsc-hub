@@ -5254,6 +5254,27 @@ state.view = sv("view", false)
 	vpad.PaddingTop = UDim.new(0, 4); vpad.PaddingBottom = UDim.new(0, 4)
 	H.movable(ov, "viewPos")
 
+	local selfHL = Instance.new("Highlight")
+	selfHL.Name = "TSC_VIEW_SELF"; selfHL.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	selfHL.FillColor = Color3.fromRGB(80, 170, 255); selfHL.FillTransparency = 0.5
+	selfHL.OutlineColor = Color3.fromRGB(150, 220, 255); selfHL.OutlineTransparency = 0
+	selfHL.Enabled = false; selfHL.Parent = gui
+	local selfBB = Instance.new("BillboardGui")
+	selfBB.AlwaysOnTop = true; selfBB.Size = UDim2.fromOffset(170, 20); selfBB.StudsOffset = Vector3.new(0, 3.2, 0)
+	selfBB.LightInfluence = 0; selfBB.Enabled = false; selfBB.Parent = espFolder
+	local selfLbl = Instance.new("TextLabel")
+	selfLbl.Size = UDim2.fromScale(1, 1); selfLbl.BackgroundTransparency = 1; selfLbl.Font = Enum.Font.GothamBlack
+	selfLbl.TextSize = 13; selfLbl.TextColor3 = Color3.fromRGB(150, 220, 255); selfLbl.TextStrokeTransparency = 0.25
+	selfLbl.Parent = selfBB
+	local function selfMark(on)
+		local c = lp.Character
+		local r = c and c:FindFirstChild("HumanoidRootPart")
+		selfHL.Adornee = on and c or nil
+		selfHL.Enabled = on and c ~= nil
+		selfBB.Adornee = on and r or nil
+		selfBB.Enabled = on and r ~= nil
+	end
+
 	local target, anchor, lastReq = nil, nil, 0
 
 	-- Position: live aus dem Character, sonst letzte bekannte (lastSeen wird oben mit 2 Hz gefuellt)
@@ -5271,6 +5292,7 @@ state.view = sv("view", false)
 		local hum = c and c:FindFirstChildOfClass("Humanoid")
 		if hum then cam.CameraSubject = hum end
 		if anchor then pcall(function() anchor:Destroy() end); anchor = nil end
+		selfMark(false)
 		ov.Visible = false
 		viewInfo.Text = "Viewing: -"
 	end
@@ -5286,6 +5308,7 @@ state.view = sv("view", false)
 		if pos then anchor.CFrame = CFrame.new(pos) end
 		target = p
 		cam.CameraSubject = anchor
+		selfMark(true)
 		ov.Visible = true
 	end
 
@@ -5348,6 +5371,8 @@ state.view = sv("view", false)
 		end
 		local myRoot = rootOf(lp)
 		local d = (myRoot and pos) and math.floor((pos - myRoot.Position).Magnitude) or nil
+		if myRoot and selfBB.Adornee ~= myRoot then selfMark(true) end
+		selfLbl.Text = d and ("YOU  %dm from target"):format(d) or "YOU"
 		ov.Text = ("VIEW  %s%s%s   ·   %s + right-click = back"):format(target.DisplayName,
 			d and ("  ·  " .. d .. "m") or "",
 			live and "" or "  ·  out of stream range (last known position)", keyName(state.keys.view))
