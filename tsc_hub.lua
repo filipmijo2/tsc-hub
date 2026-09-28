@@ -5601,7 +5601,7 @@ state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOn
 	local ringFrames = {} -- [userId] = Frame (Kreis)
 	local insideBorder = Instance.new("Frame")
 	insideBorder.Name = "TSC_SENSE_BORDER"; insideBorder.BackgroundTransparency = 1
-	insideBorder.Size = UDim2.fromScale(1, 1); insideBorder.Visible = false; insideBorder.Parent = espGui
+	insideBorder.Size = UDim2.fromScale(1, 1); insideBorder.Visible = false; insideBorder.Parent = espFolder
 	local ibStroke = Instance.new("UIStroke")
 	ibStroke.Thickness = 4; ibStroke.Color = Color3.fromRGB(255, 50, 50)
 	ibStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; ibStroke.Parent = insideBorder
@@ -5672,10 +5672,10 @@ state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOn
 		if not fr then
 			fr = Instance.new("Frame")
 			fr.Name = "TSC_SENSE_CIRCLE"; fr.BackgroundTransparency = 1; fr.BorderSizePixel = 0
-			fr.AnchorPoint = Vector2.new(0.5, 0.5); fr.Parent = espGui
+			fr.AnchorPoint = Vector2.new(0.5, 0.5); fr.ZIndex = 0; fr.Parent = espFolder
 			Instance.new("UICorner", fr).CornerRadius = UDim.new(1, 0)
 			local st = Instance.new("UIStroke")
-			st.Thickness = 2; st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; st.Parent = fr
+			st.Thickness = 3; st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; st.Parent = fr
 			ringFrames[id] = fr
 		end
 		local st = fr:FindFirstChildOfClass("UIStroke")
