@@ -5459,7 +5459,7 @@ end)()
 -- eigene Befehlsleiste. Die geht direkt von IHREM Client an den Server — fremde Client->Server-Pakete sind fuer uns
 -- prinzipiell unsichtbar, und Chat-Befehle filtert Adonis vor dem Verteilen raus. Wir sehen also nur, was der Server
 -- an UNS zurueckschickt (Hints/Messages/Notifications) — der Rest kommt nie bei uns an.
--- Was aber immer ankommt, sind die WIRKUNGEN, weil das normale Replikation ist: Team, Respawn ohne Tod, MaxHealth,
+-- Was aber immer ankommt, sind die WIRKUNGEN, weil das normale Replikation ist: Team,
 -- hohe WalkSpeed, ForceField/Sparkles/Fire/Smoke am Character, grosse Positionssprünge, Verlassen des Servers.
 -- Alles ereignisgesteuert (nur der Teleport-Check pollt mit 4 Hz ueber lebende Characters), Ausgabe in denselben
 -- Adonis-Log (Tab + Overlay + tsc_adonis_log.txt).
@@ -5478,8 +5478,8 @@ state.cmdFx = sv("cmdFx", true)
 	local function nameOf(pl) return pl.Name .. (pl.Team and (" [" .. pl.Team.Name .. "]") or "") end
 
 	local FX = { Sparkles = true, Fire = true, Smoke = true, SelectionBox = true, ParticleEmitter = true }
-	local lastDeath, lastTeam, lastPos = {}, {}, {}
-	local spawnAt, seenSince = {}, {} -- Zeitpunkt des letzten Character-Spawns / seit wann wir den Spieler sehen
+	local lastDeath, lastTeam = {}, {}
+	local spawnAt = {} -- Zeitpunkt des letzten Character-Spawns (Spawnschutz-Filter)
 	-- Spieler im Spawn-Menue spawnen dauernd neu -> komplett ignorieren
 	local function ignored(pl) return (pl.Team and pl.Team.Name == "Menu") or false end
 	local function fresh(pl, sec) local t = spawnAt[pl.UserId] return t ~= nil and os.clock() - t < sec end
@@ -5487,14 +5487,6 @@ state.cmdFx = sv("cmdFx", true)
 	local function hookHumanoid(pl, c, hum)
 		if not hum then return end
 		con(hum.Died, function() lastDeath[pl.UserId] = os.clock() end)
-		local mh = hum.MaxHealth
-		con(hum:GetPropertyChangedSignal("MaxHealth"), function()
-			-- kleine Schritte sind die Diceroll-Statpunkte des Spiels (+2 pro Punkt), kein Befehl
-			if state.cmdFx and not ignored(pl) and math.abs(hum.MaxHealth - mh) >= 25 then
-				say(nameOf(pl), ("MaxHealth %d -> %d (:health?)"):format(mh, hum.MaxHealth), false)
-			end
-			mh = hum.MaxHealth
-		end)
 		-- WalkSpeed: das Spiel selbst geht bis ~32 (PanicRun). Erst darueber ist es ein Befehl.
 		con(hum:GetPropertyChangedSignal("WalkSpeed"), function()
 				if state.cmdFx and not ignored(pl) and hum.WalkSpeed > 40 then say(nameOf(pl), ("WalkSpeed %.0f (:speed?)"):format(hum.WalkSpeed)) end
@@ -5510,7 +5502,6 @@ state.cmdFx = sv("cmdFx", true)
 		-- daraus laesst sich kein :respawn ableiten. lastDeath bleibt nur fuer den Teleport-Filter.
 		lastDeath[pl.UserId] = nil
 		spawnAt[pl.UserId] = os.clock()
-		seenSince[pl.UserId] = seenSince[pl.UserId] or os.clock()
 		hookHumanoid(pl, c, c:FindFirstChildOfClass("Humanoid"))
 		con(c.ChildAdded, function(ch)
 			-- ForceField & Co. in den ersten Sekunden nach dem Spawn = Spawnschutz des Spiels
@@ -5537,37 +5528,16 @@ state.cmdFx = sv("cmdFx", true)
 	con(Players.PlayerAdded, hookPlayer)
 	con(Players.PlayerRemoving, function(pl)
 		-- "left the server" bewusst entfernt (User 28.09.): normales Verlassen ist nicht von Kick/Ban zu trennen
-		lastDeath[pl.UserId] = nil; lastTeam[pl.UserId] = nil; lastPos[pl.UserId] = nil
-		spawnAt[pl.UserId] = nil; seenSince[pl.UserId] = nil
+		lastDeath[pl.UserId] = nil; lastTeam[pl.UserId] = nil; spawnAt[pl.UserId] = nil
 	end)
 	if lp.Character then hookChar(lp, lp.Character) end
 	con(lp.CharacterAdded, function(c) task.wait(0.3) hookChar(lp, c) end)
 
-	-- Teleports: nur grosse Spruenge, und nur wenn der Character vorher UND nachher wirklich gestreamt war
-	-- (sonst melden Streaming-Sprunge Unsinn). Aufzuege/Zuege bewegen sich langsamer als 150 Studs pro 0.25 s.
+	-- reine Anzeige; Positions-Poll entfaellt, seit die Teleport-Erkennung raus ist -> alles ereignisgesteuert
 	task.spawn(function()
 		while H.alive do
-			if state.cmdFx then
-				for _, pl in ipairs(Players:GetPlayers()) do
-					local c = pl.Character
-					local r = c and c:FindFirstChild("HumanoidRootPart")
-					if r and c:IsDescendantOf(workspace) then
-						local last = lastPos[pl.UserId]
-						local now = r.Position
-						-- Respawn versetzt den Character selbst um beliebig viel -> kurz danach nicht melden
-						if last and not ignored(pl) and not fresh(pl, 4) then
-							local d = (now - last).Magnitude
-							if d > 150 then say(nameOf(pl), ("teleported %.0f studs (:tp/:bring?)"):format(d)) end
-						end
-						seenSince[pl.UserId] = seenSince[pl.UserId] or os.clock()
-						lastPos[pl.UserId] = now
-					else
-						lastPos[pl.UserId] = nil
-					end
-				end
-			end
 			fxInfo.Text = ("%s · %d effects logged"):format(state.cmdFx and "watching" or "off", n)
-			task.wait(0.25)
+			task.wait(0.5)
 		end
 	end)
 end)()
