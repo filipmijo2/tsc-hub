@@ -5618,10 +5618,8 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 				for _, pl in ipairs(Players:GetPlayers()) do
 					if pl ~= lp and pl.Team and TEAMS[pl.Team.Name] then
 						local pos, live = posOf(pl)
-						if pos and me then
-							found[#found + 1] = { pl = pl, pos = pos, live = live,
-								d = (pos - me).Magnitude, team = pl.Team.Name }
-						end
+						found[#found + 1] = { pl = pl, pos = pos, live = live, team = pl.Team.Name,
+							d = (pos and me) and (pos - me).Magnitude or math.huge }
 					end
 				end
 				table.sort(found, function(a, b) return a.d < b.d end)
@@ -5631,7 +5629,7 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 				if state.senseRings then
 					for i = 1, math.min(#found, MAXRINGS) do
 						local f = found[i]
-						if f.d <= state.senseRange * 2.5 then
+						if f.pos and f.d <= state.senseRange * 2.5 then
 							keep[f.pl.UserId] = true
 							local inside = f.d <= state.senseRange
 							local col = inside and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 190, 60)
@@ -5650,9 +5648,10 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 				local insideList, nearList = {}, {}
 				for _, f in ipairs(found) do
 					local tag = f.team == "RAH" and "RAH" or "RECON"
-					local txt2 = ("%s %s %.0fm%s"):format(tag, f.pl.Name, f.d, f.live and "" or " (stale)")
-					if f.d <= state.senseRange then insideList[#insideList + 1] = txt2
-					elseif #nearList < 3 then nearList[#nearList + 1] = txt2 end
+					local dtxt = f.pos and ("%.0fm"):format(f.d) or "position unknown"
+					local txt2 = ("%s %s %s%s"):format(tag, f.pl.Name, dtxt, (f.pos and not f.live) and " (stale)" or "")
+					if f.pos and f.d <= state.senseRange then insideList[#insideList + 1] = txt2
+					elseif #nearList < 4 then nearList[#nearList + 1] = txt2 end
 				end
 				if #insideList > 0 then
 					ov.Text = ('<font color="#ff4040">IN SENSE RANGE (%d studs)</font>  '):format(state.senseRange)
