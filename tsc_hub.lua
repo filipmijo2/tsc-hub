@@ -1697,7 +1697,9 @@ end
 -- Spiel-Logik (PromptToolPickup): Tool direkt in workspace + Handle + CanBeDropped = aufhebbar
 state.items = sv("items", false)
 local itemObjs = {} -- [tool] = {bb=, lbl=}
-local function isDropped(t) return t:IsA("Tool") and t.Parent == workspace and t:FindFirstChild("Handle") ~= nil end
+-- nur echte Drops (gleiche Regel wie das Spiel-Script PromptToolPickup): Tag "DroppedTool" + CanBeDropped.
+-- Liegengebliebene Tools toter Spieler (nur Tag "Tool", CanBeDropped=false) sind nicht aufhebbar -> kein ESP
+local function isDropped(t) return t:IsA("Tool") and t.Parent == workspace and t.CanBeDropped and t:HasTag("DroppedTool") and t:FindFirstChild("Handle") ~= nil end
 local function clearItem(t) local o = itemObjs[t] if o then pcall(function() o.bb:Destroy() end) itemObjs[t] = nil end end
 toggle(S_items, "Dropped Items", "items", function(on) if not on then for t in pairs(itemObjs) do clearItem(t) end end end)
 con(workspace.ChildRemoved, function(t) clearItem(t) end)
@@ -2109,6 +2111,8 @@ task.spawn(function()
 					else
 						clearItem(t)
 					end
+				elseif itemObjs[t] then
+					clearItem(t)
 				end
 			end
 		end
@@ -3634,8 +3638,9 @@ local function msBot()
 	    end
 	end
 
-	task.spawn(function()
-	    while H.alive do
+	-- eine Runde der Hauptschleife; läuft in pcall, damit ein einzelner Fehler (z. B. nach einem Hinweis) den Bot
+	-- nicht dauerhaft tötet (vorher: Thread tot, Status hing auf "hint probe fired", erst Hub-Neuladen half)
+	local function tick()
 	        local mg = state.ms and minigameOpen()
 	        if not mg then
 	            -- IDLE: minigame closed. No board scan -- just back off and reset guards.
@@ -3661,6 +3666,15 @@ local function msBot()
 	            else
 	                solverCycle(board)
 	            end
+	        end
+	end
+	task.spawn(function()
+	    while H.alive do
+	        local ok, err = pcall(tick)
+	        if not ok then
+	            msLog("error, retrying: " .. tostring(err):sub(1, 120))
+	            doneSig = nil
+	            task.wait(0.5)
 	        end
 	    end
 	end)
