@@ -5550,12 +5550,11 @@ end)()
 -- aussen nicht abschaltbar -- man kann nur wissen, wann man drin ist. Genau das macht dieses Feature.
 -- 300 ist der gemessene Hivemind-Radius; fuer RAH/RECON allgemein ist keine Reichweite bestaetigt, der Ring zeigt
 -- also diese Referenzdistanz (per Slider aenderbar).
--- Ringe sind lokale, nicht kollidierende Neon-Teile (fuer andere unsichtbar, kein Remote). Nur die 3 naechsten
--- Traeger bekommen einen Ring, Update 5 Hz, damit nichts ruckelt. Ziel-Position notfalls aus lastSeen.
+-- Die Kugel ist ein lokales ForceField-Teil (fuer andere unsichtbar, kein Remote, keine Kollision). Nur die 3
+-- naechsten Traeger bekommen eine, Update 5 Hz, damit nichts ruckelt. Ziel-Position notfalls aus lastSeen.
 state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 300); state.senseRings = sv("senseRings", true)
 ;(function()
 	local TEAMS = { RAH = true, ["Recontainment Unit"] = true }
-	local SEG = 40
 	local MAXRINGS = 3
 
 	local S_sr = section(visR, "RAH / RECON Range")
@@ -5571,43 +5570,23 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 
 	local folder = Instance.new("Folder")
 	folder.Name = "TSC_SENSE"; folder.Parent = workspace
-	local rings = {} -- [userId] = { model = , parts = {} }
+	local rings = {} -- [userId] = Kugel-Part
 
 	local function killRing(id)
-		local r = rings[id]
-		if r then pcall(function() r.model:Destroy() end); rings[id] = nil end
+		local sph = rings[id]
+		if sph then pcall(function() sph:Destroy() end); rings[id] = nil end
 	end
 	local function killAllRings() for id in pairs(rings) do killRing(id) end end
-	local function newRing(col)
-		local m = Instance.new("Model")
-		m.Name = "TSC_SENSE_RING"; m.Parent = folder
-		local parts = {}
-		for i = 1, SEG do
-			local p = Instance.new("Part")
-			p.Anchored = true; p.CanCollide = false; p.CanQuery = false; p.CanTouch = false
-			p.Material = Enum.Material.Neon; p.Color = col; p.Transparency = 0.25; p.CastShadow = false
-			p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
-			p.Size = Vector3.new(1, 0.6, 1); p.Parent = m
-			parts[i] = p
-		end
-		return { model = m, parts = parts }
-	end
-
-	local rayP = RaycastParams.new()
-	rayP.FilterType = Enum.RaycastFilterType.Exclude
-	local function groundY(pos, ignore)
-		rayP.FilterDescendantsInstances = { folder, lp.Character, ignore }
-		local r = workspace:Raycast(pos + Vector3.new(0, 6, 0), Vector3.new(0, -400, 0), rayP)
-		return r and r.Position.Y or (pos.Y - 3)
-	end
-	local function drawRing(ring, center, radius)
-		local seg = 2 * math.pi * radius / SEG
-		for i, p in ipairs(ring.parts) do
-			local a = (i - 1) / SEG * math.pi * 2
-			local dir = Vector3.new(math.cos(a), 0, math.sin(a))
-			p.Size = Vector3.new(seg * 1.05, 0.6, 1.2)
-			p.CFrame = CFrame.lookAt(center + dir * radius, center + dir * radius + Vector3.new(-dir.Z, 0, dir.X))
-		end
+	-- ForceField-Kugel: rendert als durchscheinende Huelle, 1 Teil pro Traeger (statt 40 Ringsegmenten)
+	local function newSphere(col)
+		local p = Instance.new("Part")
+		p.Name = "TSC_SENSE_SPHERE"; p.Shape = Enum.PartType.Ball
+		p.Anchored = true; p.CanCollide = false; p.CanQuery = false; p.CanTouch = false
+		p.Material = Enum.Material.ForceField; p.Color = col; p.Transparency = 0.7
+		p.CastShadow = false; p.Locked = true
+		p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
+		p.Parent = folder
+		return p
 	end
 
 	-- Position: live aus dem Character, sonst letzte bekannte (lastSeen, oben mit 2 Hz gefuellt)
@@ -5622,12 +5601,12 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 	toggle(S_sr, "Warn: RAH / RECON range", "senseWarn", function(on)
 		if not on then killAllRings(); ov.Visible = false end
 	end)
-	toggle(S_sr, "Rings on ground", "senseRings", function(on) if not on then killAllRings() end end)
+	toggle(S_sr, "Show sphere", "senseRings", function(on) if not on then killAllRings() end end)
 	slider(S_sr, "Range", 50, 600, state.senseRange, function(v)
 		state.senseRange = math.floor(v + 0.5); return state.senseRange .. " studs"
 	end, "senseRange")
 	local srInfo = info(S_sr, "")
-	info(S_sr, "300 studs is the measured Hivemind radius of the Light Specimen (InfectedUI.ClientSide, 'Magnitude <= 300', through walls). For RAH/RECON in general no radius is confirmed - the ring shows that reference distance. Works whether or not you are infected.")
+	info(S_sr, "300 studs is the measured Hivemind radius of the Light Specimen (InfectedUI.ClientSide, 'Magnitude <= 300', through walls). For RAH/RECON in general no radius is confirmed - the sphere shows that reference distance. Works whether or not you are infected.")
 	table.insert(H.conns, { Disconnect = function() pcall(function() folder:Destroy() end) end })
 
 	task.spawn(function()
@@ -5647,7 +5626,7 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 				end
 				table.sort(found, function(a, b) return a.d < b.d end)
 
-				-- Ringe nur fuer die naechsten Traeger, und nur wenn sie ueberhaupt relevant nah sind
+				-- Kugeln nur fuer die naechsten Traeger, und nur wenn sie ueberhaupt relevant nah sind
 				local keep = {}
 				if state.senseRings then
 					for i = 1, math.min(#found, MAXRINGS) do
@@ -5656,11 +5635,12 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 							keep[f.pl.UserId] = true
 							local inside = f.d <= state.senseRange
 							local col = inside and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 190, 60)
-							local ring = rings[f.pl.UserId]
-							if not ring then ring = newRing(col); rings[f.pl.UserId] = ring end
-							for _, p in ipairs(ring.parts) do if p.Color ~= col then p.Color = col end end
-							local y = groundY(f.pos, f.pl.Character)
-							drawRing(ring, Vector3.new(f.pos.X, y + 0.4, f.pos.Z), state.senseRange)
+							local sph = rings[f.pl.UserId]
+							if not sph then sph = newSphere(col); rings[f.pl.UserId] = sph end
+							if sph.Color ~= col then sph.Color = col end
+							local dia = state.senseRange * 2
+							if sph.Size.X ~= dia then sph.Size = Vector3.new(dia, dia, dia) end
+							sph.CFrame = CFrame.new(f.pos)
 						end
 					end
 				end
