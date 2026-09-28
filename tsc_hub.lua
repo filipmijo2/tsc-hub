@@ -5468,7 +5468,7 @@ state.cmdFx = sv("cmdFx", true)
 	local S_fx = section(plR, "Command Effects")
 	toggle(S_fx, "Detect Command Effects", "cmdFx", function() end)
 	local fxInfo = info(S_fx, "")
-	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This watches the visible effects instead: team change, sparkles/fire/smoke, health/speed changes, teleports over 150 studs, leaves.")
+	info(S_fx, "Admins use Adonis' command bar, not chat — their packets never reach us. This watches the visible effects instead: team change, sparkles/fire/smoke, health/speed changes, teleports over 150 studs.")
 
 	local n = 0
 	local function say(who, what, hot)
@@ -5536,7 +5536,7 @@ state.cmdFx = sv("cmdFx", true)
 	for _, pl in ipairs(Players:GetPlayers()) do if pl ~= lp then hookPlayer(pl) end end
 	con(Players.PlayerAdded, hookPlayer)
 	con(Players.PlayerRemoving, function(pl)
-		if state.cmdFx and not ignored(pl) then say(pl.Name, "left the server (kick/ban?)", false) end
+		-- "left the server" bewusst entfernt (User 28.09.): normales Verlassen ist nicht von Kick/Ban zu trennen
 		lastDeath[pl.UserId] = nil; lastTeam[pl.UserId] = nil; lastPos[pl.UserId] = nil
 		spawnAt[pl.UserId] = nil; seenSince[pl.UserId] = nil
 	end)
@@ -5644,7 +5644,7 @@ task.spawn(function()
 	while H.alive do
 		local t = {}
 		for _, k in ipairs(SAVE_KEYS) do t[k] = state[k] end
-		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name; t.keyCloak = state.keys.cloak.Name; t.keyView = state.keys.view and state.keys.view.Name or nil
+		t.keyMenu = state.keys.menu.Name; t.keyVent = state.keys.vent.Name; t.keyAim = state.keys.aim.Name; t.keyAura = state.keys.aura.Name; t.keyCloak = state.keys.cloak.Name; t.keyView = state.keys.view and state.keys.view.Name or nil; t.keyPanic = state.keys.panic and state.keys.panic.Name or nil
 		t.guiX = main.Position.X.Offset; t.guiY = main.Position.Y.Offset; t.guiVisible = main.Visible
 		local ok, js = pcall(function() return HttpService:JSONEncode(t) end)
 		if ok and js ~= last then
@@ -5664,5 +5664,33 @@ function H.kill()
 	pcall(function() if desyncReal then lp.Character.HumanoidRootPart.CFrame = desyncReal end end)
 	pcall(function() gui:Destroy() end)
 end
+
+-- ================= PANIC BUTTON =================
+-- Shift + G (Taste umbelegbar): Hub komplett entfernen. Laeuft ueber H.kill, das hier erweitert wird, weil das
+-- Original den Nebel nicht zurueckgesetzt und _G.__TSC_HUB stehen gelassen hat. Danach ist nichts mehr aktiv:
+-- alle Verbindungen getrennt, alle gepatchten Werte (No Spread/Max Charge/Kill Aura/Damage Zones/Fullbright/
+-- Performance/Fake Tools) zurueckgesetzt, Kamera zurueck auf den eigenen Character, eigene GUIs zerstoert.
+-- Neu laden geht wie immer ueber das Loadstring. Zusaetzlich ein Knopf unter Options > Panic.
+;(function()
+	state.keys.panic = kc(sv("keyPanic", "G"), Enum.KeyCode.G)
+	local S_panic = section(optL, "Panic")
+	keyRow(S_panic, "Panic key (hold Shift)", "panic")
+	info(S_panic, "Shift + key removes the hub completely: connections closed, patched values restored, camera reset, GUIs destroyed. Reload with the loadstring.")
+	local origKill = H.kill
+	H.kill = function()
+		pcall(restoreNoFog)
+		pcall(function() if H.viewStop then H.viewStop() end end)
+		pcall(origKill)
+		pcall(function() RunService:UnbindFromRenderStep("TSC_VIEW") end)
+		_G.__TSC_HUB = nil
+	end
+	button(S_panic, "PANIC - remove hub now", function() task.spawn(function() pcall(H.kill) end) end)
+	con(UIS.InputBegan, function(i, gp)
+		if gp or i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		if not keyMatch(i, state.keys.panic) then return end
+		if not (UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift)) then return end
+		task.spawn(function() pcall(H.kill) end)
+	end)
+end)()
 
 return "TSC HUB geladen"
