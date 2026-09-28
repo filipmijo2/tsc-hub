@@ -2360,8 +2360,9 @@ slider(S_ms, "Click Delay (server boards)", 0, 300, state.msClickDelay, function
 end, "msClickDelay")
 local msStatus = info(S_ms, "Status: idle · waiting for hack")
 local function msLog(s)
+	-- bewusst KEIN print: Adonis scannt LogService/Konsole nach Executor-Funktionsnamen
+	-- (getconnections, firesignal, ...) -> Crash-Kick. Status nur im Menue.
 	msStatus.Text = "Status: " .. s
-	print("[TSC HUB][HACK] " .. s)
 end
 local function msBot()
 	local PlayerGui   = lp:WaitForChild("PlayerGui")
