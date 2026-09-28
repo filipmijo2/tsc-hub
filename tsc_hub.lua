@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "sensePos" , "ventEsp" , "ventEspHL" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos" , "ventEsp" , "ventEspHL" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5578,7 +5578,7 @@ end)()
 -- Die Kugel ist ein lokales ForceField-Teil (fuer andere unsichtbar, kein Remote, keine Kollision). Nur die 3
 -- naechsten Traeger bekommen eine, Update 5 Hz, damit nichts ruckelt. Ziel-Position notfalls aus lastSeen.
 state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 300); state.senseRings = sv("senseRings", true)
-state.senseOverlay = sv("senseOverlay", false)
+state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOnlyInf", false)
 ;(function()
 	local TEAMS = { RAH = true, ["Recontainment Unit"] = true }
 	local MAXRINGS = 3
@@ -5612,7 +5612,21 @@ state.senseOverlay = sv("senseOverlay", false)
 		p.CastShadow = false; p.Locked = true
 		p.TopSurface = Enum.SurfaceType.Smooth; p.BottomSurface = Enum.SurfaceType.Smooth
 		p.Parent = folder
+		local hl = Instance.new("Highlight")
+		hl.Name = "Outline"; hl.Adornee = p; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.FillTransparency = 1; hl.OutlineTransparency = 0; hl.OutlineColor = col; hl.Parent = p
 		return p
+	end
+
+	local function iAmInfected()
+		local c = lp.Character
+		if not c then return false end
+		if c:GetAttribute("Uninfected") then return false end
+		local iv = c:FindFirstChild("InfectedValues")
+		local f = iv and iv:FindFirstChild("Infected")
+		if f and f.Value then return true end
+		local t = lp.Team and lp.Team.Name
+		return t == "Infected" or t == "CIS Solitary" or t == "Contained Infected Subject"
 	end
 
 	-- Position: live aus dem Character, sonst letzte bekannte (lastSeen, oben mit 2 Hz gefuellt)
@@ -5629,6 +5643,9 @@ state.senseOverlay = sv("senseOverlay", false)
 	end)
 	toggle(S_sr, "Show sphere", "senseRings", function(on) if not on then killAllRings() end end)
 	toggle(S_sr, "Overlay (top of screen)", "senseOverlay", function(on) if not on then ov.Visible = false end end)
+	toggle(S_sr, "Only when infected", "senseOnlyInf", function(on)
+		if on and not iAmInfected() then killAllRings(); ov.Visible = false end
+	end)
 	slider(S_sr, "Range", 50, 600, state.senseRange, function(v)
 		state.senseRange = math.floor(v + 0.5); return state.senseRange .. " studs"
 	end, "senseRange")
@@ -5638,7 +5655,9 @@ state.senseOverlay = sv("senseOverlay", false)
 
 	task.spawn(function()
 		while H.alive do
-			if state.senseWarn then
+			local gate = state.senseWarn and (not state.senseOnlyInf or iAmInfected())
+			if not gate and next(rings) then killAllRings(); ov.Visible = false end
+			if gate then
 				local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
 				local me = myRoot and myRoot.Position
 				local found = {}
@@ -5658,13 +5677,15 @@ state.senseOverlay = sv("senseOverlay", false)
 				if state.senseRings then
 					for i = 1, math.min(#found, MAXRINGS) do
 						local f = found[i]
-						if f.d <= state.senseRange * 2.5 then
+						if f.d <= state.senseRange * 2 then
 							keep[f.pl.UserId] = true
 							local inside = f.d <= state.senseRange
 							local col = inside and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(255, 190, 60)
 							local sph = rings[f.pl.UserId]
 							if not sph then sph = newSphere(col); rings[f.pl.UserId] = sph end
 							if sph.Color ~= col then sph.Color = col end
+							local hl = sph:FindFirstChild("Outline")
+							if hl and hl.OutlineColor ~= col then hl.OutlineColor = col end
 							local dia = state.senseRange * 2
 							if sph.Size.X ~= dia then sph.Size = Vector3.new(dia, dia, dia) end
 							sph.CFrame = CFrame.new(f.pos)
@@ -5695,7 +5716,7 @@ state.senseOverlay = sv("senseOverlay", false)
 				end
 				srInfo.Text = ("%d RAH/RECON online · %d in range"):format(#found, #insideList)
 			else
-				srInfo.Text = "off"
+				srInfo.Text = state.senseWarn and "waiting: not infected" or "off"
 			end
 			task.wait(0.2)
 		end
