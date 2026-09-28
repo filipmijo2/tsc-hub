@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "sensePos" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "sensePos" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -5553,6 +5553,7 @@ end)()
 -- Die Kugel ist ein lokales ForceField-Teil (fuer andere unsichtbar, kein Remote, keine Kollision). Nur die 3
 -- naechsten Traeger bekommen eine, Update 5 Hz, damit nichts ruckelt. Ziel-Position notfalls aus lastSeen.
 state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 300); state.senseRings = sv("senseRings", true)
+state.senseOverlay = sv("senseOverlay", false)
 ;(function()
 	local TEAMS = { RAH = true, ["Recontainment Unit"] = true }
 	local MAXRINGS = 3
@@ -5602,6 +5603,7 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 		if not on then killAllRings(); ov.Visible = false end
 	end)
 	toggle(S_sr, "Show sphere", "senseRings", function(on) if not on then killAllRings() end end)
+	toggle(S_sr, "Overlay (top of screen)", "senseOverlay", function(on) if not on then ov.Visible = false end end)
 	slider(S_sr, "Range", 50, 600, state.senseRange, function(v)
 		state.senseRange = math.floor(v + 0.5); return state.senseRange .. " studs"
 	end, "senseRange")
@@ -5653,7 +5655,9 @@ state.senseWarn = sv("senseWarn", false); state.senseRange = sv("senseRange", 30
 					if f.pos and f.d <= state.senseRange then insideList[#insideList + 1] = txt2
 					elseif #nearList < 4 then nearList[#nearList + 1] = txt2 end
 				end
-				if #insideList > 0 then
+				if not state.senseOverlay then
+					ov.Visible = false
+				elseif #insideList > 0 then
 					ov.Text = ('<font color="#ff4040">IN SENSE RANGE (%d studs)</font>  '):format(state.senseRange)
 						.. table.concat(insideList, "  ·  ")
 					ov.Visible = true
