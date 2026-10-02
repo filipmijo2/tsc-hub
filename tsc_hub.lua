@@ -4735,8 +4735,30 @@ state.infAbil = sv("infAbil", false)
 	-- wantCloak: Spieler will getarnt sein. Endet die Tarnung ohne Tastendruck (vereinzelt beobachtet), wird neu getarnt —
 	-- erst nach >= 1.2 s, damit das Enttarnen fertig ist (sonst merkt sich CloakPlayer eine halbe Transparenz).
 	local busy, wantCloak, lastTry, hookedEv = false, false, 0, nil
+	-- Fake-TSC: Cloak ist ein Server-Script (ClassName "Script") mit RemoteEvent; der Spiel-Automat haengt sich dort gern
+	-- in "warte bis Torso.Transparency >= 1" auf. Deshalb direkt "Cloak"/"Uncloak" feuern (gleicher Aufruf wie das Spiel),
+	-- Zustand ueber die Torso-Transparenz; nie doppelt tarnen (nur bei sichtbar), Server hat keinen eigenen Timer (30 s+ gemessen).
+	H.cloakDirect = function(s)
+		local o = s and rawget(s, "OriginScript")
+		if typeof(o) ~= "Instance" or o.ClassName ~= "Script" then return nil end
+		local tor = lp.Character and lp.Character:FindFirstChild("Torso")
+		return o:FindFirstChild("RemoteEvent"), tor
+	end
+	H.isCloaked = function(s)
+		local re, tor = H.cloakDirect(s)
+		if re then return tor ~= nil and tor.Transparency > 0.95 end
+		return rawget(s, "Active") == true
+	end
 	local function setCloak(on)
 		local s = cloakSlot()
+		local re, tor = H.cloakDirect(s)
+		if re then
+			if not tor then return end
+			wantCloak = on; lastTry = os.clock()
+			if on and tor.Transparency < 0.05 then re:FireServer("Cloak")
+			elseif not on and tor.Transparency > 0.95 then re:FireServer("Uncloak") end
+			return
+		end
 		local ev = s and rawget(s, "Event")
 		if not ev or busy then return end
 		wantCloak = on
@@ -4766,7 +4788,7 @@ state.infAbil = sv("infAbil", false)
 		-- Ist die Toggle-Taste zugleich die Spieltaste (J), macht das Spiel es selbst
 		local s = cloakSlot()
 		if not s or rawget(s, "Keybind") == i.KeyCode then return end
-		setCloak(not (rawget(s, "Active") == true))
+		setCloak(not H.isCloaked(s))
 	end)
 	task.spawn(function()
 		while H.alive do
@@ -4782,7 +4804,7 @@ state.infAbil = sv("infAbil", false)
 								local o = rawget(s, "OriginScript")
 								if typeof(o) == "Instance" then
 									names[#names + 1] = o.Name
-									if o.Name == "Cloak" and rawget(s, "Active") then cloaked = true end
+									if o.Name == "Cloak" and H.isCloaked(s) then cloaked = true end
 								end
 							end)
 						end
