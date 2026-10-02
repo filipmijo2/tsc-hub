@@ -84,7 +84,7 @@ do
 	local tl2 = Instance.new("UIListLayout", titleBar); tl2.FillDirection = Enum.FillDirection.Horizontal
 	tl2.VerticalAlignment = Enum.VerticalAlignment.Center; tl2.Padding = UDim.new(0, 8); tl2.SortOrder = Enum.SortOrder.LayoutOrder
 	Instance.new("UIPadding", titleBar).PaddingLeft = UDim.new(0, 12)
-	local a = txt(titleBar, "TSC Hub", UDim2.fromOffset(0, 30), T.accent); a.Font = T.bold; a.AutomaticSize = Enum.AutomaticSize.X; a.LayoutOrder = 1
+	local a = txt(titleBar, "RSC Hub", UDim2.fromOffset(0, 30), T.accent); a.Font = T.bold; a.AutomaticSize = Enum.AutomaticSize.X; a.LayoutOrder = 1
 	local b = txt(titleBar, "Interface", UDim2.fromOffset(0, 30), T.text); b.AutomaticSize = Enum.AutomaticSize.X; b.LayoutOrder = 2
 	local c = txt(titleBar, lp.Name, UDim2.fromOffset(0, 18), T.accent); c.AutomaticSize = Enum.AutomaticSize.X; c.LayoutOrder = 3
 	c.TextSize = 12; c.BackgroundColor3 = Color3.fromRGB(40, 18, 34); c.BackgroundTransparency = 0; corner(c, 6); stroke(c, Color3.fromRGB(90, 34, 72))
@@ -5005,7 +5005,7 @@ state.bingoNotify = sv("bingoNotify", true); state.bingoAuto = sv("bingoAuto", f
 					if state.bingoNotify and notified ~= card then
 						notified = card
 						pcall(function()
-							game:GetService("StarterGui"):SetCore("SendNotification", { Title = "TSC Hub", Text = "BINGO! Claim now (" .. line .. ")", Duration = 8 })
+							game:GetService("StarterGui"):SetCore("SendNotification", { Title = "RSC Hub", Text = "BINGO! Claim now (" .. line .. ")", Duration = 8 })
 						end)
 					end
 					if state.bingoAuto then claim(card) end
@@ -5148,7 +5148,7 @@ state.infEsp = sv("infEsp", false)
 	local srcInfo = info(S_inf, "")
 
 	local function isPuddle(d)
-		return d:GetAttribute("InfectAmount") ~= nil and not d:IsDescendantOf(workspace.InfectedPuddles)
+		return d:GetAttribute("InfectAmount") ~= nil and not (workspace:FindFirstChild("InfectedPuddles") and d:IsDescendantOf(workspace.InfectedPuddles))
 	end
 	local function partOf(d)
 		if d:IsA("BasePart") then return d end
@@ -6189,4 +6189,4 @@ end
 	end)
 end)()
 
-return "TSC HUB geladen"
+return "RSC HUB geladen"
