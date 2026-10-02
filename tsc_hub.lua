@@ -2024,22 +2024,32 @@ do
 			local actor = game:GetService("Players").LocalPlayer.PlayerScripts:FindFirstChild("FrameworkActor")
 			local myGen = actor:GetAttribute("TSC_NSGen")
 			local RS = game:GetService("RunService")
-			local tbl, lastScan = nil, 0
+			local tbl, alt, lastScan = nil, false, 0
 			local function scan()
 				for _, t in ipairs(getgc(true)) do
 					if type(t) == "table" and rawget(t, "LockDebuff") ~= nil and rawget(t, "Max") ~= nil
 						and type(rawget(t, "step")) == "function" then
 						return t
 					end
+					-- Fake-/aeltere TSC-Versionen: StatsPanel-Tabelle mit Stamina/MaxStamina/StaminaBool/UpdateStamina
+					if type(t) == "table" and rawget(t, "MaxStamina") ~= nil and rawget(t, "StaminaLockDebuff") ~= nil
+						and type(rawget(t, "UpdateStamina")) == "function" then
+						return t, true
+					end
 				end
 			end
 			while actor:GetAttribute("TSC_NSGen") == myGen do
 				if actor:GetAttribute("TSC_NoStam") then
-					if not tbl and os.clock() - lastScan > 3 then lastScan = os.clock(); tbl = scan() end
+					if not tbl and os.clock() - lastScan > 3 then lastScan = os.clock(); tbl, alt = scan() end
 					if tbl then
 						local ok = pcall(function()
-							if tbl.Value < tbl.Max then tbl.Value = tbl.Max end
-							if (tbl.Bool or 0) > 0 then tbl.Bool = 0 end
+							if alt then
+								if tbl.Stamina < tbl.MaxStamina then tbl.Stamina = tbl.MaxStamina end
+								if (tbl.StaminaBool or 0) > 0 then tbl.StaminaBool = 0 end
+							else
+								if tbl.Value < tbl.Max then tbl.Value = tbl.Max end
+								if (tbl.Bool or 0) > 0 then tbl.Bool = 0 end
+							end
 						end)
 						if not ok then tbl = nil end
 					end
@@ -2357,7 +2367,8 @@ end)
 -- plrUniqueTag_txt-Attribut = Staff-Tag (QA etc.). Panel oben mittig, immer sichtbar (auch wenn Hub zu).
 -- Moderatoren/Admins stehen NICHT in der Hauptgruppe (dort oft nur L-3 o. ä.), sondern in "TSC Moderation Team" 33326090:
 -- Rang >= 190 = Junior Moderators bis Holder (Staff); 170 Intelligence Access / 175 Forced LOA / 180 Suspended nur als Info.
-local GROUP_ID, STAFF_MIN = 11577231, 90
+-- Fake-TSC (andere PlaceId, eigene Gruppe mit identischer Rangstruktur): Gruppe des Spiel-Erstellers nehmen
+local GROUP_ID, STAFF_MIN = (game.PlaceId ~= 7131355525 and game.CreatorType == Enum.CreatorType.Group) and game.CreatorId or 11577231, 90
 H.MOD = { group = 33326090, min = 190, info = 170 } -- als H-Feld: Hauptchunk am 200-Locals-Limit
 local rankCache = {} -- [userId] = {rank=, role=}
 local function fetchRank(p)
@@ -3886,8 +3897,10 @@ local function ddTarget(name)
 end
 local function ddQuests()
 	local out = {}
-	local root = game:GetService("ReplicatedStorage"):FindFirstChild("Values")
-	root = root and root:FindFirstChild("Quests"); root = root and root:FindFirstChild("DeadDrops")
+	local RSq = game:GetService("ReplicatedStorage")
+	local root = RSq:FindFirstChild("Values")
+	-- Fake-TSC: Quests direkt unter ReplicatedStorage statt unter Values
+	root = (root and root:FindFirstChild("Quests")) or RSq:FindFirstChild("Quests"); root = root and root:FindFirstChild("DeadDrops")
 	if not root then return out end
 	for _, npc in ipairs(root:GetChildren()) do
 		for _, q in ipairs(npc:GetChildren()) do
@@ -4343,9 +4356,26 @@ state.radioOverlay = sv("radioOverlay", false)
 		radioInfo.Text = #log > 0 and lines(14) or "no messages yet"
 		ov.Text = '<font color="#f5a8de">RADIO</font>\n' .. (#log > 0 and lines(7) or "...")
 	end
+	-- Fake-TSC hat kein RadioHistory: dort passiv auf WalkieTalkieMessage mithoeren (Server schickt Sender-Char,
+	-- Text, Funkgeraet mit Attribut Channel; nur OnClientEvent, kein Hook)
+	local RSr = game:GetService("ReplicatedStorage")
+	local hasHistory = RSr:FindFirstChild("Remotes") and RSr.Remotes:FindFirstChild("RadioHistory")
+	local wtm = not hasHistory and RSr:FindFirstChild("Remotes") and RSr.Remotes:FindFirstChild("WalkieTalkieMessage")
+	if wtm then
+		con(wtm.OnClientEvent, function(kind, who, msg, dev)
+			if not state.radioSpy or kind == "SENDMESSAGE" or type(msg) ~= "string" then return end
+			local sender = typeof(who) == "Instance" and who.Name or tostring(who)
+			local ch = typeof(dev) == "Instance" and dev:GetAttribute("Channel") or "?"
+			log[#log + 1] = { Date = os.date("%H:%M:%S"), Sender = sender, Message = msg, Channel = ch }
+			while #log > MAXLOG do table.remove(log, 1) end
+		end)
+	end
 	task.spawn(function()
 		while H.alive do
-			if state.radioSpy then
+			if state.radioSpy and not hasHistory then
+				if not wtm then radioInfo.Text = "no radio remote in this game" else render() end
+				ov.Visible = state.radioOverlay
+			elseif state.radioSpy then
 				local ok, h = pcall(function() return game:GetService("ReplicatedStorage").Remotes.RadioHistory:InvokeServer() end)
 				if ok and type(h) == "table" and type(h.history) == "table" then
 					local fresh = {}
@@ -5139,7 +5169,7 @@ state.infEsp = sv("infEsp", false)
 		while H.alive do
 			if state.infEsp then
 				local c = lp.Character
-				local iv = c and c:FindFirstChild("InfectedValues")
+				local iv = c and (c:FindFirstChild("InfectedValues") or c:FindFirstChild("LatexValues"))
 				local my = c and c:FindFirstChild("HumanoidRootPart")
 				-- eigener Zustand
 				local lvl, max, spore, full = 0, 100, 1, false
@@ -5202,8 +5232,8 @@ state.infEsp = sv("infEsp", false)
 							if pr and pc:IsDescendantOf(workspace) then
 								local ok2, isInf = pcall(Check, p)
 								if ok2 and isInf then
-									local pv = pc:FindFirstChild("InfectedValues")
-									local t = pv and pv:FindFirstChild("InfectedType")
+									local pv = pc:FindFirstChild("InfectedValues") or pc:FindFirstChild("LatexValues")
+									local t = pv and (pv:FindFirstChild("InfectedType") or pv:FindFirstChild("LatexType"))
 									near[#near + 1] = { (pr.Position - my.Position).Magnitude, p.Name, t and tostring(t.Value) or "?" }
 								end
 							end
@@ -5631,7 +5661,7 @@ state.senseOverlay = sv("senseOverlay", false); state.senseOnlyInf = sv("senseOn
 		local c = lp.Character
 		if not c then return false end
 		if c:GetAttribute("Uninfected") then return false end
-		local iv = c:FindFirstChild("InfectedValues")
+		local iv = c:FindFirstChild("InfectedValues") or c:FindFirstChild("LatexValues")
 		local f = iv and iv:FindFirstChild("Infected")
 		if f and f.Value then return true end
 		local t = lp.Team and lp.Team.Name
@@ -5911,7 +5941,7 @@ state.itType = sv("itType", 1); state.itWait = sv("itWait", 14)
 
 	local function iv()
 		local c = lp.Character
-		return c and c:FindFirstChild("InfectedValues")
+		return c and (c:FindFirstChild("InfectedValues") or c:FindFirstChild("LatexValues"))
 	end
 	local function level()
 		local v = iv()
