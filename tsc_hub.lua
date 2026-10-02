@@ -2370,6 +2370,9 @@ end)
 -- Fake-TSC (andere PlaceId, eigene Gruppe mit identischer Rangstruktur): Gruppe des Spiel-Erstellers nehmen
 local GROUP_ID, STAFF_MIN = (game.PlaceId ~= 7131355525 and game.CreatorType == Enum.CreatorType.Group) and game.CreatorId or 11577231, 90
 H.MOD = { group = 33326090, min = 190, info = 170 } -- als H-Feld: Hauptchunk am 200-Locals-Limit
+-- Fake "Sierra Research Corporation" (81826874): Modteam "SRC | Moderation Team" 825389872, Raenge 6 Intelligence Access
+-- (Staff-Alts, z. B. AdmiralAckbarr), 10 Suspended, 20 Trial Admin ... 255 Holder -> ab 6 als Staff zaehlen
+if GROUP_ID == 81826874 then H.MOD = { group = 825389872, min = 6, info = 6 } end
 local rankCache = {} -- [userId] = {rank=, role=}
 local function fetchRank(p)
 	if rankCache[p.UserId] then return end
@@ -4361,6 +4364,39 @@ state.radioOverlay = sv("radioOverlay", false)
 	local RSr = game:GetService("ReplicatedStorage")
 	local hasHistory = RSr:FindFirstChild("Remotes") and RSr.Remotes:FindFirstChild("RadioHistory")
 	local wtm = not hasHistory and RSr:FindFirstChild("Remotes") and RSr.Remotes:FindFirstChild("WalkieTalkieMessage")
+	-- Fake-TSC: Server legt jede Funknachricht kurz als StringValue in <Radio-Tool>.CapturedTexts ab (Value = Text,
+	-- Kinder Sender/Chat/Date) – auch in den Tools ANDERER Spieler (Backpack repliziert). Per ChildAdded live mitlesen.
+	if not hasHistory then
+		local hookedCT = {}
+		local function addMsg(m)
+			if not state.radioSpy or not m:IsA("StringValue") then return end
+			local snd, cht, dat = m:WaitForChild("Sender", 2), m:WaitForChild("Chat", 2), m:WaitForChild("Date", 2)
+			local k = tostring(cht and cht.Value) .. "|" .. tostring(dat and dat.Value) .. "|" .. tostring(snd and snd.Value) .. "|" .. m.Value
+			if m.Value == "" or seenKey[k] then return end
+			seenKey[k] = true
+			log[#log + 1] = { Date = dat and dat.Value or os.date("%H:%M"), Sender = snd and snd.Value or "?", Message = m.Value, Channel = cht and cht.Value or "?" }
+			while #log > MAXLOG do table.remove(log, 1) end
+		end
+		local function watchTool(t)
+			local ct = t:IsA("Tool") and t:FindFirstChild("CapturedTexts")
+			if not ct or hookedCT[ct] then return end
+			hookedCT[ct] = true
+			for _, m in ipairs(ct:GetChildren()) do task.spawn(pcall, addMsg, m) end
+			con(ct.ChildAdded, function(m) task.spawn(pcall, addMsg, m) end)
+		end
+		local function watchCont(c)
+			if not c then return end
+			for _, t in ipairs(c:GetChildren()) do pcall(watchTool, t) end
+			con(c.ChildAdded, function(t) task.defer(pcall, watchTool, t) end)
+		end
+		local function watchPlayer(pl)
+			task.spawn(function() watchCont(pl:WaitForChild("Backpack", 10)) end)
+			if pl.Character then watchCont(pl.Character) end
+			con(pl.CharacterAdded, watchCont)
+		end
+		for _, pl in ipairs(Players:GetPlayers()) do watchPlayer(pl) end
+		con(Players.PlayerAdded, watchPlayer)
+	end
 	if wtm then
 		con(wtm.OnClientEvent, function(kind, who, msg, dev)
 			if not state.radioSpy or kind == "SENDMESSAGE" or type(msg) ~= "string" then return end
@@ -4373,7 +4409,7 @@ state.radioOverlay = sv("radioOverlay", false)
 	task.spawn(function()
 		while H.alive do
 			if state.radioSpy and not hasHistory then
-				if not wtm then radioInfo.Text = "no radio remote in this game" else render() end
+				render()
 				ov.Visible = state.radioOverlay
 			elseif state.radioSpy then
 				local ok, h = pcall(function() return game:GetService("ReplicatedStorage").Remotes.RadioHistory:InvokeServer() end)
