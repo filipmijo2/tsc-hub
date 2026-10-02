@@ -4755,8 +4755,10 @@ state.infAbil = sv("infAbil", false)
 		if re then
 			if not tor then return end
 			wantCloak = on; lastTry = os.clock()
-			if on and tor.Transparency < 0.05 then re:FireServer("Cloak")
-			elseif not on and tor.Transparency > 0.95 then re:FireServer("Uncloak") end
+			-- Slot.Active mitfuehren: sonst loest die Spieltaste (U) waehrend Hub-Tarnung "StartAbility" = ZWEITES Cloak aus ->
+			-- Server speichert PreviousTransparency=1 an allen Teilen und Uncloak macht nie wieder sichtbar (nur Respawn hilft)
+			if on and tor.Transparency < 0.05 then pcall(function() s.Active = true end); re:FireServer("Cloak")
+			elseif not on and tor.Transparency > 0.95 then pcall(function() s.Active = false end); re:FireServer("Uncloak") end
 			return
 		end
 		local ev = s and rawget(s, "Event")
