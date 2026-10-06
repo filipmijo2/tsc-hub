@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "tpZH", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos"  , "itType" , "itWait" , "ventEsp" , "ventEspHL" , "autoRevive" , "wallbang" , "wbRadius" , "trkEsp" , "trkRings" , "trkOnlyInf" , "auraIndPos" , "buyFrames" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "tpZH", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos"  , "itType" , "itWait" , "ventEsp" , "ventEspHL" , "autoRevive" , "wbRadius" , "trkEsp" , "trkRings" , "trkOnlyInf" , "auraIndPos" , "buyFrames" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -1061,7 +1061,8 @@ end)()
 -- 3rd Person verfehlt die Muendungs-Linie sonst knapp), dazu ein Toleranz-Radius. Kein Ziel -> Originalverhalten.
 -- GunManager ruft LocalGunScript(tool) einmal pro Waffe beim Eintreffen im Backpack -> neue Closures -> nachpatchen.
 -- Keine Hooks, keine Remotes. UNGETESTET, ob der Server die Sichtlinie prueft.
-state.wallbang = sv("wallbang", false); state.wbRadius = sv("wbRadius", 3)
+state.wallbang = false -- startet immer aus (User 07.10.); nur Taste + Toleranz werden gespeichert
+state.wbRadius = sv("wbRadius", 3)
 state.keys.wallbang = kc(sv("keyWallbang", nil), nil)
 ;(function()
 	local wrapOf = setmetatable({}, { __mode = "k" }) -- [original] = wrapper
