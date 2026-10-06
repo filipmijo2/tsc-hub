@@ -5208,6 +5208,14 @@ state.chatOverlay = sv("chatOverlay", false)
 		end
 		return table.concat(t, "\n")
 	end
+	-- lokaler Fake-Eintrag (Impersonate)
+	H.fakeChat = function(pl, text)
+		local team = pl.Team
+		log[#log + 1] = { t = os.date("%H:%M:%S"), name = pl.DisplayName, text = text, far = false,
+			role = team and team.Name or "", roleCol = team and team.TeamColor.Color:ToHex() or "767676" }
+		while #log > MAXLOG do table.remove(log, 1) end
+		dirty = true
+	end
 	con(TCS.MessageReceived, function(msg)
 		if not state.chatLog then return end
 		local ch = msg.TextChannel and msg.TextChannel.Name or ""
@@ -5292,6 +5300,127 @@ state.disgDetect = sv("disgDetect", true)
 			task.wait(1)
 		end
 	end)
+end)()
+
+-- ================= IMPERSONATE (client-side) =================
+-- Nur lokal sichtbar. Fake-Chat: Sprechblase ueber dem Kopf des Targets (TextChatService:DisplayBubble; das Spiel
+-- zeigt eh nur Bubbles, Chatfenster ist aus) + Eintrag im Hub-Chat-Log. Avatar: der GELADENE Character des Targets
+-- wird 1:1 kopiert (Accessoires, Shirt/Pants, BodyColors, CharacterMesh, Gesicht, Kopf-Mesh, Koerperfarben).
+-- Die Rollen-Regel (bei manchen Teams entfernt der Server den ganzen eigenen Avatar, bei anderen nur Teile) steckt
+-- damit automatisch drin, weil genau das kopiert wird, was er gerade traegt. Injury-Accessoires (Attr InjurySystem)
+-- bleiben aussen vor. Eigene Teile werden nur lokal abgehaengt (Parent=nil) und bei Restore zurueckgehaengt.
+;(function()
+	local TCS = game:GetService("TextChatService")
+	local S_imp = section(plR, "Impersonate (only you see it)")
+	local impInfo = info(S_imp, "Pick a player under Target first.", T.dim)
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(1, 0, 0, 24); box.BackgroundColor3 = T.track; box.BorderSizePixel = 0; box.Font = T.font
+	box.TextSize = 12; box.TextColor3 = T.text; box.PlaceholderText = "message... (Enter = say as target)"
+	box.PlaceholderColor3 = T.dim; box.TextXAlignment = Enum.TextXAlignment.Left; box.Text = ""; box.ClearTextOnFocus = false
+	box.LayoutOrder = nextOrder(S_imp); box.Parent = S_imp.f
+	stroke(box); corner(box, 2)
+	Instance.new("UIPadding", box).PaddingLeft = UDim.new(0, 6)
+
+	local function say()
+		local p = markedPlayer()
+		local msg = box.Text
+		if msg == "" then return end
+		local c = p and p.Character
+		local head = c and c:FindFirstChild("Head")
+		if not head then impInfo.Text = p and (p.Name .. " is not loaded") or "Pick a player under Target first."; return end
+		pcall(function() TCS:DisplayBubble(head, msg) end)
+		if H.fakeChat then pcall(H.fakeChat, p, msg) end
+		impInfo.Text = ('%s says: %s'):format(p.Name, msg)
+		box.Text = ""
+	end
+	con(box.FocusLost, function(enter) if enter then say() end end)
+	button(S_imp, "Say as Target", say)
+
+	-- Avatar kopieren
+	local saved   -- { parts = {inst}, clones = {inst}, face, mesh = {id, tex, scale}, colors = {[part]=col}, dn }
+	local function isLook(x)
+		if x:IsA("Accessory") then return x:GetAttribute("InjurySystem") == nil end
+		return x:IsA("Shirt") or x:IsA("Pants") or x:IsA("ShirtGraphic") or x:IsA("BodyColors") or x:IsA("CharacterMesh")
+	end
+	local LIMBS = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
+	local function restore()
+		if not saved then return end
+		local s = saved; saved = nil
+		for _, x in ipairs(s.clones) do pcall(function() x:Destroy() end) end
+		local c = lp.Character
+		if c and c == s.char then
+			for _, x in ipairs(s.parts) do pcall(function() x.Parent = c end) end
+			local face = c:FindFirstChild("Head") and c.Head:FindFirstChild("face")
+			if face and s.face then face.Texture = s.face end
+			local mesh = c:FindFirstChild("Head") and c.Head:FindFirstChildOfClass("SpecialMesh")
+			if mesh and s.mesh then mesh.MeshId, mesh.TextureId, mesh.Scale = s.mesh[1], s.mesh[2], s.mesh[3] end
+			for part, col in pairs(s.colors) do pcall(function() part.Color = col end) end
+			local hum = c:FindFirstChildOfClass("Humanoid")
+			if hum and s.dn then hum.DisplayName = s.dn end
+		end
+	end
+	local function copyFrom(p)
+		local src = p and p.Character
+		local c = lp.Character
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if not (src and src:FindFirstChild("Head") and src:IsDescendantOf(workspace)) then
+			impInfo.Text = p and (p.Name .. " is not loaded (must be near / streamed in)") or "Pick a player under Target first."; return
+		end
+		if not hum then return end
+		restore()
+		local s = { char = c, parts = {}, clones = {}, colors = {} }
+		saved = s
+		-- eigenes Aussehen abhaengen
+		for _, x in ipairs(c:GetChildren()) do
+			if isLook(x) then s.parts[#s.parts + 1] = x; x.Parent = nil end
+		end
+		-- seins drauf
+		for _, x in ipairs(src:GetChildren()) do
+			if isLook(x) then
+				local ok, cl = pcall(function()
+					local was = x.Archivable; x.Archivable = true
+					local k = x:Clone(); x.Archivable = was
+					return k
+				end)
+				if ok and cl then
+					cl:SetAttribute("TSC_IMP", true)
+					if cl:IsA("Accessory") then
+						local hd = cl:FindFirstChild("Handle")
+						if hd then
+							for _, w in ipairs(hd:GetChildren()) do if w:IsA("JointInstance") or w:IsA("WeldConstraint") then w:Destroy() end end
+							hd.Anchored = false; hd.CanCollide = false; hd.Massless = true
+						end
+						pcall(function() hum:AddAccessory(cl) end)
+						if cl.Parent ~= c then cl.Parent = c end
+					else
+						cl.Parent = c
+					end
+					s.clones[#s.clones + 1] = cl
+				end
+			end
+		end
+		-- Gesicht, Kopf-Mesh, Koerperfarben
+		local myHead, hisHead = c:FindFirstChild("Head"), src:FindFirstChild("Head")
+		local myFace, hisFace = myHead and myHead:FindFirstChild("face"), hisHead and hisHead:FindFirstChild("face")
+		if myFace and hisFace then s.face = myFace.Texture; myFace.Texture = hisFace.Texture end
+		local myMesh, hisMesh = myHead and myHead:FindFirstChildOfClass("SpecialMesh"), hisHead and hisHead:FindFirstChildOfClass("SpecialMesh")
+		if myMesh and hisMesh then
+			s.mesh = { myMesh.MeshId, myMesh.TextureId, myMesh.Scale }
+			myMesh.MeshId, myMesh.TextureId, myMesh.Scale = hisMesh.MeshId, hisMesh.TextureId, hisMesh.Scale
+		end
+		for _, n in ipairs(LIMBS) do
+			local a, b = c:FindFirstChild(n), src:FindFirstChild(n)
+			if a and b and a:IsA("BasePart") and b:IsA("BasePart") then s.colors[a] = a.Color; a.Color = b.Color end
+		end
+		s.dn = hum.DisplayName
+		hum.DisplayName = p.DisplayName
+		impInfo.Text = ("You look like %s (%s) - %d items copied"):format(p.Name, p.Team and p.Team.Name or "?", #s.clones)
+	end
+	button(S_imp, "Copy Target's Avatar", function() copyFrom(markedPlayer()) end)
+	button(S_imp, "Restore my Avatar", function() restore(); impInfo.Text = "restored" end)
+	con(lp.CharacterAdded, function() saved = nil end)
+	table.insert(H.conns, { Disconnect = function() pcall(restore) end })
+	info(S_imp, "Everything here is local only. Avatar copy takes exactly what the target wears right now, so the role rules (uniform only vs. own avatar) carry over. Target must be loaded.")
 end)()
 
 -- ================= FAKE TRANSLATOR =================
