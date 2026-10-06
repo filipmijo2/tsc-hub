@@ -5390,8 +5390,28 @@ end)()
 							for _, w in ipairs(hd:GetChildren()) do if w:IsA("JointInstance") or w:IsA("WeldConstraint") then w:Destroy() end end
 							hd.Anchored = false; hd.CanCollide = false; hd.Massless = true
 						end
-						pcall(function() hum:AddAccessory(cl) end)
-						if cl.Parent ~= c then cl.Parent = c end
+						-- AddAccessory schweisst clientseitig nicht -> selbst ueber passende Attachments
+						cl.Parent = c
+						local att = hd and hd:FindFirstChildWhichIsA("Attachment")
+						local target
+						if att then
+							for _, d in ipairs(c:GetDescendants()) do
+								if d:IsA("Attachment") and d.Name == att.Name and d.Parent ~= hd and not d:IsDescendantOf(cl) then target = d break end
+							end
+						end
+						if hd then
+							local w = Instance.new("Weld")
+							w.Name = "AccessoryWeld"; w.Part0 = hd
+							if att and target then
+								w.Part1 = target.Parent; w.C0 = att.CFrame; w.C1 = target.CFrame
+							else
+								-- kein Attachment: relative Lage vom Original uebernehmen (Bezug Kopf)
+								local oh = x:FindFirstChild("Handle")
+								w.Part1 = c:FindFirstChild("Head")
+								if oh and src:FindFirstChild("Head") then w.C0 = oh.CFrame:ToObjectSpace(src.Head.CFrame) end
+							end
+							w.Parent = hd
+						end
 					else
 						cl.Parent = c
 					end
