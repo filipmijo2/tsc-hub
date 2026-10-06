@@ -5378,7 +5378,31 @@ end)()
 		local c = p and p.Character
 		local head = c and c:FindFirstChild("Head")
 		if not head then impInfo.Text = p and (p.Name .. " is not loaded") or "Pick a Player first."; return end
+		-- Bubble-Look wie beim Spiel (LatexChatClient.OnBubbleAdded): pro Spieler Attribute Font/FontEnum,
+		-- ChatTextColor, ChatBackgroundColor, FontSize. Fake-Bubbles haben keine TextSource -> Spiel-Callback greift
+		-- nicht. Deshalb kurz eigenen Callback davor, der fuer diesen Kopf die Werte des Sprechers liefert.
+		local props = Instance.new("BubbleChatMessageProperties")
+		pcall(function()
+			local fe = p:GetAttribute("FontEnum")
+			if fe and Enum.Font[fe] and Enum.Font[fe] ~= Enum.Font.Unknown then props.FontFace = Font.fromEnum(Enum.Font[fe]) end
+		end)
+		pcall(function() local f = p:GetAttribute("Font"); if f then props.FontFace = Font.new(f) end end)
+		pcall(function() local v = p:GetAttribute("ChatTextColor"); if v then props.TextColor3 = v end end)
+		pcall(function() local v = p:GetAttribute("ChatBackgroundColor"); if v then props.BackgroundColor3 = v end end)
+		pcall(function() local v = tonumber(p:GetAttribute("FontSize")); if v then props.TextSize = v end end)
+		local orig
+		pcall(function() orig = getcallbackvalue(TCS, "OnBubbleAdded") end)
+		local function mine(m, a)
+			if a == head then return props end
+			if orig then return orig(m, a) end
+		end
+		pcall(function() TCS.OnBubbleAdded = mine end)
 		pcall(function() TCS:DisplayBubble(head, msg) end)
+		task.delay(0.5, function()
+			local now
+			pcall(function() now = getcallbackvalue(TCS, "OnBubbleAdded") end)
+			if now == mine then pcall(function() TCS.OnBubbleAdded = orig end) end
+		end)
 		if H.fakeChat then pcall(H.fakeChat, p, msg) end
 		impInfo.Text = ('%s says: %s'):format(p.Name, msg)
 		box.Text = ""
