@@ -5395,8 +5395,9 @@ end)()
 						local att = hd and hd:FindFirstChildWhichIsA("Attachment")
 						local target
 						if att then
-							for _, d in ipairs(c:GetDescendants()) do
-								if d:IsA("Attachment") and d.Name == att.Name and d.Parent ~= hd and not d:IsDescendantOf(cl) then target = d break end
+							for _, bp in ipairs(c:GetChildren()) do
+								local d = bp:IsA("BasePart") and bp:FindFirstChild(att.Name)
+								if d and d:IsA("Attachment") then target = d break end
 							end
 						end
 						if hd then
