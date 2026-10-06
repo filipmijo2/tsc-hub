@@ -5535,7 +5535,7 @@ end)()
 		s.dn = hum.DisplayName
 		s.into = into
 		hum.DisplayName = into.DisplayName
-		impInfo.Text = ("%s now looks like %s (%s) - %d items"):format(who == lp and "you" or who.Name, into.Name,
+		impInfo.Text = ("%s now %s like %s (%s) - %d items"):format(who == lp and "you" or who.Name, who == lp and "look" or "looks", into.Name,
 			into.Team and into.Team.Name or "?", #s.clones)
 	end
 	-- Hover-Namensschild (PlayerScripts.plrTag): ein einziges BillboardGui "Nametag", das SelectPlayer(player, char)
