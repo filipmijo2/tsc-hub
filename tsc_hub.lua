@@ -5312,7 +5312,52 @@ end)()
 ;(function()
 	local TCS = game:GetService("TextChatService")
 	local S_imp = section(plR, "Impersonate (only you see it)")
-	local impInfo = info(S_imp, "Pick a player under Target first.", T.dim)
+	local impInfo = info(S_imp, "Pick a player above first.", T.dim)
+	-- eigenes Target (unabhaengig vom Players-Target), Dropdown wird beim Aufklappen frisch gebaut
+	local impId
+	local function impPlayer() return impId and Players:GetPlayerByUserId(impId) end
+	do
+		txt(S_imp.f, "Player", UDim2.new(1, 0, 0, 14)).LayoutOrder = nextOrder(S_imp)
+		local pbox = Instance.new("TextButton")
+		pbox.Size = UDim2.new(1, 0, 0, 28); pbox.BackgroundColor3 = T.panel2; pbox.BorderSizePixel = 0; pbox.AutoButtonColor = false
+		pbox.Text = ""; pbox.LayoutOrder = nextOrder(S_imp); pbox.Parent = S_imp.f
+		stroke(pbox); corner(pbox, 6)
+		local cur = txt(pbox, "none", UDim2.new(1, -34, 1, 0)); cur.Position = UDim2.fromOffset(10, 0)
+		cur.TextTruncate = Enum.TextTruncate.AtEnd
+		local arr = txt(pbox, "▼", UDim2.new(0, 14, 1, 0), T.dim); arr.Position = UDim2.new(1, -22, 0, 0); arr.TextSize = 10
+		local list = Instance.new("ScrollingFrame")
+		list.Size = UDim2.new(1, 0, 0, 200); list.CanvasSize = UDim2.new(); list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		list.ScrollBarThickness = 4; list.BackgroundColor3 = T.bg; list.BorderSizePixel = 0; list.Visible = false
+		list.LayoutOrder = nextOrder(S_imp); list.Parent = S_imp.f
+		stroke(list); corner(list, 6)
+		Instance.new("UIListLayout", list).SortOrder = Enum.SortOrder.LayoutOrder
+		local function close() list.Visible = false; arr.Text = "▼" end
+		con(pbox.MouseButton1Click, function()
+			if list.Visible then close() return end
+			for _, c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+			local my = rootOf(lp)
+			local pls = {}
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p ~= lp then
+					local r = rootOf(p)
+					pls[#pls + 1] = { p = p, d = (r and my) and (r.Position - my.Position).Magnitude or math.huge }
+				end
+			end
+			table.sort(pls, function(a, b) return a.d < b.d end)
+			for i, e in ipairs(pls) do
+				local b = Instance.new("TextButton")
+				b.Size = UDim2.new(1, 0, 0, 22); b.BackgroundTransparency = 1; b.Font = T.font; b.TextSize = 12
+				b.RichText = true; b.TextXAlignment = Enum.TextXAlignment.Left; b.TextTruncate = Enum.TextTruncate.AtEnd
+				local tc = e.p.Team and e.p.Team.TeamColor.Color:ToHex() or "999999"
+				b.Text = ('   %s  <font color="#%s">%s</font>  %s'):format(e.p.Name, tc, e.p.Team and e.p.Team.Name or "",
+					e.d < math.huge and ("%.0fm"):format(e.d) or "(not loaded)")
+				b.TextColor3 = (e.p.UserId == impId) and T.accent or T.dim
+				b.LayoutOrder = i; b.Parent = list
+				b.MouseButton1Click:Connect(function() impId = e.p.UserId; cur.Text = e.p.Name; close() end)
+			end
+			list.Visible = true; arr.Text = "▲"
+		end)
+	end
 	local box = Instance.new("TextBox")
 	box.Size = UDim2.new(1, 0, 0, 24); box.BackgroundColor3 = T.track; box.BorderSizePixel = 0; box.Font = T.font
 	box.TextSize = 12; box.TextColor3 = T.text; box.PlaceholderText = "message... (Enter = say as target)"
@@ -5322,12 +5367,12 @@ end)()
 	Instance.new("UIPadding", box).PaddingLeft = UDim.new(0, 6)
 
 	local function say()
-		local p = markedPlayer()
+		local p = impPlayer()
 		local msg = box.Text
 		if msg == "" then return end
 		local c = p and p.Character
 		local head = c and c:FindFirstChild("Head")
-		if not head then impInfo.Text = p and (p.Name .. " is not loaded") or "Pick a player under Target first."; return end
+		if not head then impInfo.Text = p and (p.Name .. " is not loaded") or "Pick a player above first."; return end
 		pcall(function() TCS:DisplayBubble(head, msg) end)
 		if H.fakeChat then pcall(H.fakeChat, p, msg) end
 		impInfo.Text = ('%s says: %s'):format(p.Name, msg)
@@ -5364,7 +5409,7 @@ end)()
 		local c = lp.Character
 		local hum = c and c:FindFirstChildOfClass("Humanoid")
 		if not (src and src:FindFirstChild("Head") and src:IsDescendantOf(workspace)) then
-			impInfo.Text = p and (p.Name .. " is not loaded (must be near / streamed in)") or "Pick a player under Target first."; return
+			impInfo.Text = p and (p.Name .. " is not loaded (must be near / streamed in)") or "Pick a player above first."; return
 		end
 		if not hum then return end
 		restore()
@@ -5437,7 +5482,7 @@ end)()
 		hum.DisplayName = p.DisplayName
 		impInfo.Text = ("You look like %s (%s) - %d items copied"):format(p.Name, p.Team and p.Team.Name or "?", #s.clones)
 	end
-	button(S_imp, "Copy Target's Avatar", function() copyFrom(markedPlayer()) end)
+	button(S_imp, "Copy Target's Avatar", function() copyFrom(impPlayer()) end)
 	button(S_imp, "Restore my Avatar", function() restore(); impInfo.Text = "restored" end)
 	con(lp.CharacterAdded, function() saved = nil end)
 	table.insert(H.conns, { Disconnect = function() pcall(restore) end })
