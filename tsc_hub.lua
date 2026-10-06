@@ -2593,7 +2593,16 @@ local function msBot()
 	        local ok, conns = pcall(getconnections, signal)
 	        if ok and conns and #conns > 0 then
 	            for _, c in ipairs(conns) do
-	                pcall(function() c:Fire(table.unpack(args, 1, args.n)) end)
+	                -- Handler in EIGENEM Thread starten: c:Fire ist nicht yieldbar -> das task.wait(1) in
+	                -- selectDoor(nil) (Sieg/Niederlage) brach ab, Canvas blieb offen + clearBoard lief nie,
+	                -- und der Bot hing nach dem ersten Hack. task.spawn laeuft bis zum ersten Yield sofort.
+	                local f
+	                pcall(function() f = c.Function end)
+	                if typeof(f) == "function" then
+	                    task.spawn(f, table.unpack(args, 1, args.n))
+	                else
+	                    pcall(function() c:Fire(table.unpack(args, 1, args.n)) end)
+	                end
 	            end
 	            return true
 	        end
@@ -3795,16 +3804,25 @@ local function msBot()
 	--   doneSig          (solver fallback) signature of a board we already finished
 	--   cheatedThisOpen  (reader path) we already played this open instance to completion
 	local doneSig = nil
-	local cheatedThisOpen = false
+	local cheatedThisOpen = false   -- false oder eine Zelle des geloesten Boards
+	local doneMarker = nil          -- Zelle des Boards, zu dem doneSig gehoert
+	-- irgendeine Zelle des Boards: clearBoard() zerstoert alle Zellen, ein neues Board hat neue Instanzen
+	local function boardMarker(board)
+	    for _, ch in ipairs(board:GetChildren()) do
+	        if ch:FindFirstChild("Hidden") and ch:FindFirstChild("Button") then return ch end
+	    end
+	end
 
 	-- the solver fallback for one engagement (used only if the reader can't read).
 	local function solverCycle(board)
 	    local g0, R0, C0 = readBoard(board)
 	    local before = g0 and signature(g0, R0, C0) or ""
+	    if doneSig and (not doneMarker or doneMarker.Parent ~= board) then doneSig = nil end -- Zellen ersetzt -> neues Board
 	    if before == doneSig then task.wait(0.4); return end
+	    local marker = boardMarker(board)
 	    local result = playCycle(board)
 	    if result == "over" then
-	        doneSig = before
+	        doneSig, doneMarker = before, marker
 	        task.wait(0.4)
 	    elseif result == "acted" then
 	        waitForChange(board, before, 1.0)   -- event-driven: wait for it to land
@@ -3827,12 +3845,16 @@ local function msBot()
 	                doneSig, cheatedThisOpen = nil, false   -- between games -> reset
 	                task.wait(0.2)
 	            elseif state.msReader then
+	                if cheatedThisOpen and cheatedThisOpen.Parent ~= board then
+	                    cheatedThisOpen = false              -- Zellen ersetzt -> neues Board, auch ohne Schliessen
+	                end
 	                if cheatedThisOpen then
 	                    task.wait(0.4)                       -- solved; wait for it to close
 	                else
+	                    local marker = boardMarker(board)
 	                    local res = cheatSolve(board)
 	                    if res == "over" then
-	                        cheatedThisOpen = true           -- done until this instance closes
+	                        cheatedThisOpen = marker or false -- done until this board closes / is replaced
 	                        task.wait(0.4)
 	                    else                                 -- "fail": read unavailable -> solve it
 	                        solverCycle(board)
