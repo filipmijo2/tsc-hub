@@ -2575,7 +2575,7 @@ con(RunService.RenderStepped, function()
 	if live then
 		pos = r.Position; markLast.pos = pos; markLast.t = os.clock()
 		if markHL.Adornee ~= c then markHL.Adornee = c end
-		markHL.Enabled = true
+		markHL.Enabled = not state.cleanScreen
 	else
 		markHL.Enabled = false
 		local ls = lastSeen[p.UserId]
