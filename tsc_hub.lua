@@ -5499,10 +5499,44 @@ end)()
 			if a and b and a:IsA("BasePart") and b:IsA("BasePart") then s.colors[a] = a.Color; a.Color = b.Color end
 		end
 		s.dn = hum.DisplayName
+		s.into = into
 		hum.DisplayName = into.DisplayName
 		impInfo.Text = ("%s now looks like %s (%s) - %d items"):format(who == lp and "you" or who.Name, into.Name,
 			into.Team and into.Team.Name or "?", #s.clones)
 	end
+	-- Hover-Namensschild (PlayerScripts.plrTag): ein einziges BillboardGui "Nametag", das SelectPlayer(player, char)
+	-- per Heartbeat befuellt und an den gehoverten Char haengt. Ist der gehoverte Char verwandelt, laesst RenderStepped
+	-- (laeuft vor dem Rendern, nach dem letzten Heartbeat) SelectPlayer das Schild fuer "Into" befuellen und haengt es
+	-- zurueck an den verwandelten Char -> Name/Rang/Team/Farben exakt wie beim echten Into.
+	local selectPlayer, nametag, selTried
+	local function findTagFns()
+		selTried = true
+		local ps = lp:FindFirstChild("PlayerScripts")
+		local pt = ps and ps:FindFirstChild("plrTag")
+		nametag = (pt and pt:FindFirstChild("Nametag")) or workspace.Terrain:FindFirstChild("Nametag")
+		pcall(function()
+			for _, f in ipairs(getgc(false)) do
+				if type(f) == "function" and islclosure(f) then
+					local ok, n, src = pcall(debug.info, f, "ns")
+					if ok and n == "SelectPlayer" and tostring(src):find("plrTag") then selectPlayer = f break end
+				end
+			end
+		end)
+	end
+	con(RunService.RenderStepped, function()
+		if not next(saves) then return end
+		if not selTried then findTagFns() end
+		if not (selectPlayer and nametag and nametag.Adornee) then return end
+		local ad = nametag.Adornee
+		local ch = ad:FindFirstAncestorOfClass("Model")
+		while ch and not saves[ch] and ch.Parent ~= workspace do ch = ch.Parent:FindFirstAncestorOfClass("Model") end
+		local s = ch and saves[ch]
+		local into = s and s.into
+		local ic = into and into.Character
+		if not ic then return end
+		pcall(selectPlayer, into, ic, nil)
+		nametag.Adornee = ad; nametag.Parent = workspace.Terrain
+	end)
 	button(S_imp, "Transform Player into Into", function() transform(getWho(), getInto()) end)
 	button(S_imp, "Restore Player", function()
 		local p = getWho()
