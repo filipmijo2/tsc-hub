@@ -37,7 +37,7 @@ local SAVE_KEYS = { "fullbright", "esp", "espDist", "espFade", "espFadePow", "br
 	"aim", "aimTeam", "aimVis", "aimHealth", "aimSticky", "aimDist", "aimSens", "aimPart", "aimType", "aimRage", "aimRageType",
 	"aimPred", "aimPredX", "aimPredY", "aimSmooth", "aimSmX", "aimSmY", "fov", "fovGlow", "fovFill", "fovSize", "fovStyle", "fovColor", "fovGunOnly", "aimGunOnly" , "alarms", "alarmDist" , "alarmOff" , "alarmDel",
 	"espBox", "espBoxStyle", "espBoxFill", "espHealth", "espName", "espDistTxt", "espTextSize2", "espTracer", "espTracerFov",
-	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos"  , "itType" , "itWait" , "ventEsp" , "ventEspHL" , "autoRevive" }
+	"espTracerFrom", "espTeamCol", "espTargetCol", "espHideTeam", "msClickDelay", "nostam", "doorphase", "radioSpy", "radioOverlay", "chatLog", "chatOverlay", "norecoil", "ventFake", "ventFakeIdx", "autoreload", "disgDetect", "radioPos", "chatPos", "nospread", "fakeTranslator", "maxcharge", "aura", "auraRange", "auraTeam", "auraDelay2", "auraSmooth2", "auraRing", "adonisMon", "adonisOverlay", "infAbil", "ventLock", "staffPos", "bingoNotify", "bingoAuto", "clickTp", "tpDetail", "tpBubbleSpeed", "tpZH", "antiAfk", "dmgOff", "dmgShow" , "auraForceMax" , "infEsp" , "view" , "viewPos" , "espTeamTag" , "ventJam" , "silentStep" , "silentStepCloak" , "cmdFx" , "senseWarn" , "senseRange" , "senseRings" , "senseOverlay" , "senseOnlyInf" , "sensePos"  , "itType" , "itWait" , "ventEsp" , "ventEspHL" , "autoRevive" }
 
 local state = { fullbright = sv("fullbright", false), esp = sv("esp", false), espDist = sv("espDist", 1500),
 	espFade = sv("espFade", 0.4), espFadePow = sv("espFadePow", 2), bright = sv("bright", 2), markId = sv("markId", nil), markName = sv("markName", nil),
@@ -4918,14 +4918,17 @@ end)()
 -- Detail-Modus: Strg + Klick setzt stattdessen eine Blase; Pfeiltasten schieben sie (kamerarelativ), Numpad 4/1 = hoch/runter,
 -- Enter = hinteleportieren, Backspace = abbrechen. Während die Blase existiert, schluckt ContextActionService diese Tasten,
 -- damit der Charakter nicht mitläuft. Keine Remotes.
-state.clickTp = sv("clickTp", false); state.tpDetail = sv("tpDetail", false); state.tpBubbleSpeed = sv("tpBubbleSpeed", 20)
+state.clickTp = sv("clickTp", false); state.tpDetail = sv("tpDetail", false); state.tpBubbleSpeed = sv("tpBubbleSpeed", 20); state.tpZH = sv("tpZH", false)
 ;(function()
 	local CAS = game:GetService("ContextActionService")
 	toggle(S_move, "Ctrl + Click TP", "clickTp", function(on) if not on then H.tpCancel() end end)
 	toggle(S_move, "TP Detail Mode (bubble)", "tpDetail", function(on) if not on then H.tpCancel() end end)
 	slider(S_move, "Bubble Speed", 5, 80, state.tpBubbleSpeed, function(v)
 		state.tpBubbleSpeed = math.floor(v + 0.5); return state.tpBubbleSpeed .. " studs/s" end, "tpBubbleSpeed")
-	local tpInfo = info(S_move, "Ctrl+Click = teleport. Detail mode: Ctrl+Click places a bubble · arrows move · Numpad 4/1 up/down · Enter = TP · Backspace = cancel.")
+	-- Hoch/Runter zusätzlich auf Z/H. Deutsches Layout: die Taste mit "Z" drauf kommt in Roblox als KeyCode.Y an (gemessen).
+	local UP_ZH, DOWN_ZH = Enum.KeyCode.Y, Enum.KeyCode.H
+	toggle(S_move, "Bubble Up/Down on Z / H", "tpZH", function() if H.tpRebind then H.tpRebind() end end)
+	local tpInfo = info(S_move, "Ctrl+Click = teleport. Detail mode: Ctrl+Click places a bubble · arrows move · Numpad 4/1 (or Z/H) up/down · Enter = TP · Backspace = cancel.")
 
 	local params = RaycastParams.new(); params.FilterType = Enum.RaycastFilterType.Exclude
 	local function mouseHit()
@@ -4996,12 +4999,21 @@ state.clickTp = sv("clickTp", false); state.tpDetail = sv("tpDetail", false); st
 			l.Size = UDim2.fromScale(1, 1); l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold; l.TextSize = 11
 			l.TextColor3 = Color3.new(1, 1, 1); l.TextStrokeTransparency = 0.3; l.Parent = bb
 			H.tpBubble = bubble
-			CAS:BindActionAtPriority("TSC_TP_BUBBLE", onKey, false, 3000, table.unpack(KEYS))
+			H.tpRebind()
 		end
 		bubble.Position = pos
 		-- Kamera auf die Blase (rotiert/zoomt normal um sie herum)
 		local c = workspace.CurrentCamera
 		if c then c.CameraSubject = bubble end
+	end
+	-- Z/H nur schlucken, wenn die Option an ist (sonst gehen sie normal ans Spiel)
+	H.tpRebind = function()
+		if not bubble then return end
+		local keys = table.clone(KEYS)
+		if state.tpZH then table.insert(keys, UP_ZH); table.insert(keys, DOWN_ZH) end
+		pcall(function() CAS:UnbindAction("TSC_TP_BUBBLE") end)
+		table.clear(held)
+		CAS:BindActionAtPriority("TSC_TP_BUBBLE", onKey, false, 3000, table.unpack(keys))
 	end
 	table.insert(H.conns, { Disconnect = function() H.tpCancel() end })
 
@@ -5024,8 +5036,8 @@ state.clickTp = sv("clickTp", false); state.tpDetail = sv("tpDetail", false); st
 		if held[Enum.KeyCode.Down] then d = d - f end
 		if held[Enum.KeyCode.Right] then d = d + r end
 		if held[Enum.KeyCode.Left] then d = d - r end
-		if held[Enum.KeyCode.KeypadFour] then d = d + Vector3.yAxis end
-		if held[Enum.KeyCode.KeypadOne] then d = d - Vector3.yAxis end
+		if held[Enum.KeyCode.KeypadFour] or (state.tpZH and held[UP_ZH]) then d = d + Vector3.yAxis end
+		if held[Enum.KeyCode.KeypadOne] or (state.tpZH and held[DOWN_ZH]) then d = d - Vector3.yAxis end
 		if d.Magnitude > 0 then bubble.Position = bubble.Position + d.Unit * state.tpBubbleSpeed * dt end
 		-- Lot zum Boden anzeigen
 		params.FilterDescendantsInstances = { lp.Character, bubble, line }
